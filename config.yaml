@@ -1,0 +1,68 @@
+# ==== Tham số chiến lược chung (mỗi thị trường bên dưới có thể ghi đè bất kỳ khoá nào) ====
+default_market: crypto
+timeframe: 1d
+
+# Bộ lọc thị trường
+regime_long_ma: 200      # PTJ
+regime_fast_ma: 5        # Bibirion
+regime_slow_ma: 25       # Bibirion
+use_regime_long: true    # tắt để kiểm tra "bỏ riêng bộ lọc 200 ngày"
+
+# Chọn mã
+min_volume_usd: 5000000
+max_positions: 10
+momentum_lookback: 5
+volume_lookback: 20
+
+# Quản lý rủi ro
+initial_capital: 10000
+position_pct: 0.02       # mỗi lệnh tối đa 2% vốn (1/50); null = 1 / max_positions
+risk_per_trade: 0.01
+stop_loss_pct: 0.04
+time_stop_days: 2        # tính theo số phiên giao dịch
+time_stop_min_gain: 0.03
+trail_trigger_pct: 0.12
+trail_pct: 0.06
+min_order_usd: 10
+
+# Chi phí (tính vào backtest)
+fee_pct: 0.001
+slippage_pct: 0.002
+periods_per_year: 365
+
+# ==== Thị trường ====
+markets:
+  crypto:
+    source: ccxt
+    exchange: binance
+    quote: USDT
+    benchmark: BTC/USDT
+    # Endpoint dữ liệu công khai, dùng khi mạng chặn api.binance.com. Để null để dùng mặc định.
+    public_api_url: https://data-api.binance.vision/api/v3
+    data_dir: data/csv/crypto
+    since: "2020-01-01"
+    # Base coin bị loại khỏi danh sách quét (stablecoin, coin bọc, fiat)
+    exclude_bases: [USDC, BUSD, TUSD, FDUSD, DAI, USDP, PAX, UST, USDD, PYUSD, USDS, USD1,
+                    EUR, GBP, AUD, TRY, BRL, AEUR, EURI, WBTC, WBETH, BETH, BTC]
+    quote_ccy: USDT
+
+  us_stocks:
+    source: yfinance
+    benchmark: SPY
+    # sp500 | nasdaq100 | sp500+nasdaq100 | hoặc danh sách mã [AAPL, MSFT, ...]
+    universe: sp500+nasdaq100
+    data_dir: data/csv/us_stocks
+    since: "2015-01-01"
+    min_volume_usd: 20000000
+    fee_pct: 0.0005          # phí + SEC/FINRA ước lượng
+    slippage_pct: 0.0005
+    periods_per_year: 252
+    quote_ccy: USD
+
+  # Sau này: vàng / forex (cùng nguồn yfinance). Lưu ý: forex trên Yahoo không có khối lượng,
+  # nên phải đặt min_volume_usd: 0 và xếp hạng chỉ theo đà tăng.
+  # macro:
+  #   source: yfinance
+  #   benchmark: DX-Y.NYB
+  #   universe: [GC=F, SI=F, EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X]
+  #   data_dir: data/csv/macro

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+data/csv/
+backtest/results/
+live/state_*.json
+live/paper_*.csv
+*.html
+!backtest/chart_template.html
+.DS_Store
+data/*.log
