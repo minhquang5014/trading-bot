@@ -33,6 +33,22 @@ Mỗi ngày, từ danh sách altcoin đủ thanh khoản:
 3. Xếp hạng theo **mức tăng 5 ngày** và **khối lượng hôm nay so với trung bình 20 ngày**.
 4. Lấy top `MAX_POSITIONS` mã (mặc định 10).
 
+Bộ lọc thêm (khoá `filters` trong `config.yaml`, mỗi thị trường ghi đè được). Lấy ý từ hai repo ở mục 8 cộng với cách chọn mã của Bibirion:
+
+| Bộ lọc | Nguồn | Điều kiện |
+|---|---|---|
+| `trend_ma: 200` | Repo PTJ 200 EMA | Chính mã đó đóng cửa trên EMA200 của nó, không chỉ BTC |
+| `golden_cross: [50, 200]` | Repo Golden Cross | EMA50 > EMA200 của mã |
+| `rs_lookback: 20` | PTJ / momentum | Mã tăng mạnh hơn chỉ số chuẩn trong 20 phiên |
+| `cooldown_days: 10` | Bibirion "bỏ mã yếu" | Vừa lỗ ở mã nào thì 10 ngày không mua lại |
+| `breakout_days: 20` | Bibirion | Đóng cửa cao nhất 20 phiên |
+| `min_vol_ratio: 1.5` | Bibirion | Khối lượng hôm nay ≥ 1,5 lần trung bình |
+| `max_extension: 0.25` | | Không đuổi mã đã cách MA25 quá 25% |
+| `min_history: 200` | | Bỏ coin mới niêm yết (< 200 nến) |
+| `fresh_cross_days` | Repo PTJ (crossover) | MA5 vừa cắt lên MA25 trong N phiên |
+
+Crypto bật cả 8 bộ lọc đầu, cổ phiếu Mỹ bật 4 bộ lọc đầu.
+
 ### Bước 3: Chia vốn
 
 - Không dùng đòn bẩy.
@@ -156,6 +172,17 @@ Ghi chú triển khai:
 - [ ] Test riêng từng giai đoạn: thị trường lên 2021, xuống 2022, đi ngang 2023.
 - [ ] Danh sách altcoin phải gồm cả những mã **đã bị gỡ khỏi sàn**, nếu không kết quả sẽ đẹp giả (lỗi "chỉ nhìn kẻ sống sót").
 
+### Kết quả thử bộ lọc ($1000, 2% mỗi lệnh, phí đã trừ)
+
+| | Lệnh | Vốn cuối | MDD | Profit factor |
+|---|---|---|---|---|
+| Crypto, chưa lọc | 6420 | $229 | -78% | 0.70 |
+| Crypto, 8 bộ lọc | 859 | $854 | -15% | 0.72 |
+| Cổ phiếu Mỹ, chưa lọc | 8006 | $925 | -16% | 0.96 |
+| Cổ phiếu Mỹ, 4 bộ lọc + thoát nới (-8%, 10 ngày, MA25, trailing 20/10) | 1329 | $1268 | -5% | 1.35 |
+
+Bộ lọc giảm mạnh số lệnh và sụt giảm, nhưng với luật thoát gốc thì trung bình mỗi lệnh vẫn lỗ (profit factor < 1). Với crypto, 601/859 lệnh dính cắt lỗ -4% ngay trong ngày đầu: mua ở giá mở cửa sau một cây nến bứt phá thường là mua đúng đỉnh của cú pump.
+
 ## 7. Rủi ro đã biết
 
 - Altcoin có thể sập 30–50% qua một đêm, khi đó lệnh cắt lỗ -4% có thể khớp xa hơn nhiều.
@@ -169,3 +196,65 @@ Ghi chú triển khai:
 - Golden Cross / Death Cross nhiều loại tài sản: https://github.com/MayankBharati/Quant-Trading-Project
 - ccxt: https://github.com/ccxt/ccxt
 - vectorbt: https://github.com/polakowo/vectorbt
+- EMA pullback + ATR stop (MT5): https://github.com/MT5-Automation-Labs/mt5-ema-pullback-ea
+- XAUUSD trend pullback (MT5): https://github.com/srpo93/XAUUSD-bot
+- Freqtrade strategies: https://github.com/freqtrade/freqtrade-strategies
+- Freqtrade strategies that work: https://github.com/paulcpk/freqtrade-strategies-that-work
+- Bot EMA đơn giản: https://github.com/jcarenza67/alpaca-ema-bot, https://github.com/a2gs/EMA_Binance_BOT, https://github.com/jimtin/algorithmic_trading_bot
+
+## 9. Đề xuất cải tiến (đã đưa vào bot)
+
+Lỗi lớn nhất hiện tại: với crypto, 601/859 lệnh dính cắt lỗ -4% ngay trong ngày đầu. Bot mua ở giá mở cửa sau một cây nến bứt phá, tức là thường mua đúng đỉnh cú pump. Các repo ở mục 8 xử lý chuyện này như sau:
+
+| Ý tưởng | Lấy từ | Bot hiện tại | Giải quyết |
+|---|---|---|---|
+| Chờ giá hồi về EMA nhanh rồi mới vào: nến chạm EMA21 mà không thủng EMA chậm, sau đó nến xanh đóng lại trên EMA21 (có thể thêm RSI ≤ 45 lúc hồi, ≥ 50 lúc vào) | MT5 EA, XAUUSD, TrendRider | Mua ngay sau nến bứt phá | Mua đỉnh pump |
+| Cắt lỗ theo ATR (1,5–2 ATR) thay vì -4% cố định | MT5 EA, XAUUSD, FixedRiskRewardLoss | -4% | Mã biến động mạnh bị quét stop. Chia vốn theo rủi ro nên mã càng biến động thì tự mua càng ít |
+| EMA dài phải dốc lên trong N nến | MT5 EA, XAUUSD | Chỉ cần giá nằm trên | Giá lình xình quanh một đường EMA phẳng |
+| ADX > 20–25 và +DI > −DI | ADXMomentum, TrendRider | Không có | Thị trường đi ngang |
+| RSI < 70, bỏ nến có khối lượng tăng quá đột biến | TrendRider, EMASkipPump | Xếp hạng còn thưởng điểm cho khối lượng đột biến | Mua lúc quá nóng |
+| Không đuổi giá: bỏ lệnh nếu giá cách EMA21 quá 1,5 ATR | XAUUSD | `max_extension` theo % | Đuổi mã đã chạy xa |
+| Ngừng mở lệnh mới sau 3 lần cắt lỗ trong một khoảng thời gian (StoplossGuard), hoặc khi tài khoản sụt quá 10% (MaxDrawdown) | freqtrade TrendRider | Chỉ nghỉ theo từng mã | Chuỗi thua liên tục |
+| Dời stop về hoà vốn ở 1R, chốt lời theo R (2–3,5R) | XAUUSD, FixedRiskRewardLoss | Trailing kích hoạt ở +12% | Lời rồi lại thành lỗ |
+
+(R = khoảng cách từ giá vào đến điểm cắt lỗ ban đầu.)
+
+Cách làm:
+
+1. Trước tiên, backtest riêng từng phương pháp của các repo trên cùng dữ liệu đã tải (thư mục `clone_repo/`) để biết phương pháp nào thật sự có lời sau phí.
+2. Đưa vào bot **từng ý một**, dưới dạng tuỳ chọn trong `config.yaml` (giữ nguyên luật gốc), và so với bản hiện tại trên cả crypto lẫn cổ phiếu Mỹ. Thứ tự: vào lệnh kiểu hồi về EMA → cắt lỗ ATR → ADX / EMA dốc lên → StoplossGuard + MaxDrawdown → hoà vốn ở 1R và chốt lời theo R.
+3. Ghép những ý có ích, rồi kiểm tra riêng từng năm 2021/2022/2023 để tránh kết quả chỉ đẹp nhờ chỉnh tham số khớp quá khứ.
+
+### Kết quả
+
+Mỗi ý là một tuỳ chọn trong `config.yaml` (mặc định tắt): `filters.pullback`, `filters.max_dist_atr`, `filters.ema_slope`, `filters.adx_min`, `filters.max_rsi`, `filters.max_vol_ratio`, `rank_by`, `stop_atr`, `breakeven_r`, `take_profit_r`, `stoploss_guard`, `drawdown_guard`. Script `backtest/ablation.py` bật **từng ý một** trên nền cấu hình gốc, rồi ghép lại. Mỗi năm được backtest riêng từ $1000, tối đa 10 lệnh, trần 10% vốn mỗi lệnh, đã trừ phí.
+
+```bash
+.venv/bin/python backtest/ablation.py --market us_stocks   # → backtest/results/<market>/ablation.md
+```
+
+**Cổ phiếu Mỹ, 2015–2026 (12 năm):**
+
+| Biến thể | Năm lời | ROI trung vị | Năm tệ nhất | MDD tệ nhất | Lệnh | PF |
+|---|---|---|---|---|---|---|
+| Bot gốc | 5/12 | -4% | -22% | -28% | 8047 | 0.94 |
+| Hồi về EMA21 | 2/12 | -4% | -20% | -23% | 7873 | 0.94 |
+| Cắt lỗ 2 ATR | 4/12 | -1% | -23% | -27% | 7914 | 0.97 |
+| StoplossGuard + MaxDrawdown | 4/12 | -1% | -15% | -18% | 5981 | 0.97 |
+| Hoà vốn 1R + chốt 2,5R, giữ time stop 2 ngày | 4/12 | -8% | -23% | -33% | 8595 | 0.92 |
+| Chỉ thoát theo R (bỏ time stop và MA5) | 9/12 | +4% | -6% | -19% | 2066 | 1.14 |
+| Hồi EMA21 + 2 ATR + thoát theo R | 8/12 | +8% | -7% | -19% | 1307 | 1.25 |
+| **Ghép tất cả** (+ EMA200 dốc, ADX ≥ 25, RSI < 70, guards) | **11/12** | **+6%** | **-5%** | **-14%** | 1148 | **1.34** |
+| Giữ SPY | 10/12 | +18% | -19% | -34% | – | – |
+
+- Từng ý riêng lẻ gần như không giúp được gì. Nguyên nhân chính là **time stop 2 ngày + thoát dưới MA5** cắt lệnh trước khi kịp lời. Khi bỏ hai luật đó và thoát theo R, các ý còn lại mới có tác dụng.
+- Bản ghép giữ lệnh trung bình 14 phiên (trung vị 10), vẫn là đánh ngắn.
+- Kiểm tra độ bền của bản ghép: trượt giá ×3, 5 hoặc 20 lệnh, chốt 2R hoặc 3,5R, cắt lỗ 1,5 ATR, bỏ hoà vốn. Mọi biến thể đều lời 8–10/12 năm, và lời trung bình ở cả hai nửa 2015–2020 và 2021–2026.
+- Lãi mỗi năm thấp hơn giữ SPY (trung vị +6% so với +18%). Bù lại, năm tệ nhất chỉ -5% (SPY -19%) và bot chỉ có lệnh khi thị trường tốt.
+- **Bản ghép đã được bật cho `us_stocks`** trong `config.yaml`. Chạy liên tục 2015–2026 với cấu hình thật (2% vốn/lệnh): $1000 → $1217, MDD -3,4%, PF 1,37, 1103 lệnh.
+
+**Crypto, 2020–2026:** không ý nào, kể cả bản ghép, lời quá 2/7 năm. PF tốt nhất là 0,86 (ADX). Cắt lỗ ATR giảm tỷ lệ dính stop ngày đầu từ 69% xuống 9%, nhưng vẫn lỗ. **Cấu hình crypto vì vậy giữ nguyên.**
+
+**Lưu ý:**
+- Danh sách cổ phiếu Mỹ vẫn bị lỗi "chỉ nhìn kẻ sống sót" (mục 6).
+- Biểu đồ `backtest/chart.py` mô phỏng lại bằng JavaScript và **chưa có** các tuỳ chọn mới, nên với `us_stocks` biểu đồ sẽ khác backtest.

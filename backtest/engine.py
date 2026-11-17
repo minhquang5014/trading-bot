@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 
 from data.storage import load_all  # noqa: E402
 from strategy import load_config  # noqa: E402
-from strategy.exits import Position, check_stop, close_exit_reason, update_trailing  # noqa: E402
+from strategy.exits import Position, check_stop, check_take_profit, close_exit_reason, update_trailing  # noqa: E402
 from strategy.regime import compute_regime  # noqa: E402
 from strategy.scanner import build_panels, compute_signals, rank_candidates  # noqa: E402
 from strategy.sizing import position_notional  # noqa: E402
@@ -43,7 +43,7 @@ class Engine:
 
         self.calendar = bench.index
         self.p = build_panels(alts, index=self.calendar)
-        self.sig = compute_signals(self.p, cfg)
+        self.sig = compute_signals(self.p, cfg, bench["close"])
         self.regime = compute_regime(bench["close"], cfg)
         self.last_valid = self.p["close"].apply(lambda s: s.last_valid_index()).to_dict()
         self.reset(cfg["initial_capital"])
@@ -52,10 +52,13 @@ class Engine:
     def reset(self, capital: float):
         self.cash = float(capital)
         self.positions: dict[str, Position] = {}
-        self.pending_entries: list[tuple[str, float]] = []
+        self.pending_entries: list[tuple[str, float, float]] = []   # (mã, tiền, % cắt lỗ)
         self.pending_exits: dict[str, str] = {}
         self.trades: list[dict] = []
         self.equity_curve: list[dict] = []
+        self.last_loss: dict[str, str] = {}   # mã -> ngày thoát lỗ gần nhất (cho cooldown)
+        self.stop_dates: list[str] = []       # ngày các lệnh dính cắt lỗ (cho stoploss_guard)
+        self.paused_until: str | None = None  # ngừng mở lệnh mới tới hết ngày này
 
     def to_state(self) -> dict:
         return {
@@ -63,23 +66,30 @@ class Engine:
             "positions": {s: p.to_dict() for s, p in self.positions.items()},
             "pending_entries": self.pending_entries,
             "pending_exits": self.pending_exits,
+            "last_loss": self.last_loss,
+            "stop_dates": self.stop_dates,
+            "paused_until": self.paused_until,
         }
 
     def load_state(self, state: dict):
         self.cash = state["cash"]
         self.positions = {s: Position(**p) for s, p in state["positions"].items()}
-        self.pending_entries = [tuple(x) for x in state["pending_entries"]]
+        sl = self.cfg["stop_loss_pct"]
+        self.pending_entries = [tuple(x) if len(x) == 3 else (x[0], x[1], sl) for x in state["pending_entries"]]
         self.pending_exits = dict(state["pending_exits"])
+        self.last_loss = dict(state.get("last_loss", {}))
+        self.stop_dates = list(state.get("stop_dates", []))
+        self.paused_until = state.get("paused_until")
 
     # ---------- khớp lệnh ----------
-    def _buy(self, sym: str, raw_price: float, notional: float, date):
+    def _buy(self, sym: str, raw_price: float, notional: float, date, stop_pct: float = None):
         cfg = self.cfg
         fill = raw_price * (1 + cfg["slippage_pct"])
         qty = notional / (fill * (1 + cfg["fee_pct"]))
         self.cash -= notional
         self.positions[sym] = Position(
             symbol=sym, entry_date=str(pd.Timestamp(date).date()), entry_price=fill, qty=qty,
-            cost=notional, stop=fill * (1 - cfg["stop_loss_pct"]), highest=fill, last_price=raw_price,
+            cost=notional, stop=fill * (1 - stop_pct), highest=fill, last_price=raw_price, risk_pct=stop_pct,
         )
 
     def _sell(self, sym: str, raw_price: float, date, reason: str):
@@ -95,6 +105,11 @@ class Engine:
             "entry_price": pos.entry_price, "exit_price": fill, "cost": pos.cost, "pnl": pnl,
             "ret": pnl / pos.cost, "bars_held": pos.bars_held, "reason": reason,
         })
+        if pnl <= 0:
+            self.last_loss[sym] = str(pd.Timestamp(date).date())
+        if reason == "stop_loss":
+            self.stop_dates.append(str(pd.Timestamp(date).date()))
+            self.stop_dates = self.stop_dates[-50:]
 
     # ---------- một ngày ----------
     def step(self, date):
@@ -119,22 +134,28 @@ class Engine:
                 self._sell(sym, o, date, reason)
 
         entries, self.pending_entries = self.pending_entries, []
-        for sym, notional in entries:
+        for sym, notional, stop_pct in entries:
             if sym in self.positions or len(self.positions) >= cfg["max_positions"]:
                 continue
             o = P["open"].at[date, sym] if sym in P["open"].columns else float("nan")
             notional = min(notional, self.cash)
             if pd.isna(o) or notional < cfg.get("min_order_usd", 10):
                 continue
-            self._buy(sym, o, notional, date)
+            self._buy(sym, o, notional, date, stop_pct)
 
         for sym, pos in list(self.positions.items()):
-            o, low = P["open"].at[date, sym], P["low"].at[date, sym]
+            o, low, high = P["open"].at[date, sym], P["low"].at[date, sym], P["high"].at[date, sym]
             if pd.isna(o) or pd.isna(low):
                 continue
+            # Cùng phiên chạm cả cắt lỗ lẫn chốt lời: giả định chạm cắt lỗ trước (bảo thủ).
             px = check_stop(pos, o, low)
             if px is not None:
-                self._sell(sym, px, date, "trailing_stop" if pos.trailing else "stop_loss")
+                reason = "trailing_stop" if pos.trailing else "breakeven" if pos.breakeven else "stop_loss"
+                self._sell(sym, px, date, reason)
+                continue
+            px = check_take_profit(pos, o, high, cfg)
+            if px is not None:
+                self._sell(sym, px, date, "take_profit")
 
     def on_close(self, date):
         P, cfg = self.p, self.cfg
@@ -148,7 +169,7 @@ class Engine:
             pos.last_price = float(c)
             pos.bars_held += 1
             update_trailing(pos, float(h), cfg)
-            reason = close_exit_reason(pos, c, self.sig["sma_fast"].at[date, sym], market_ok, cfg)
+            reason = close_exit_reason(pos, c, self.sig["sma_exit"].at[date, sym], market_ok, cfg)
             if reason and sym not in self.pending_exits:
                 self.pending_exits[sym] = reason
 
@@ -157,12 +178,56 @@ class Engine:
                                   "n_positions": len(self.positions)})
 
         self.pending_entries = []
-        if bool(reg["ok"]):
+        if bool(reg["ok"]) and not self._paused(date):
             slots = cfg["max_positions"] - len(self.positions) + len(self.pending_exits)
             if slots > 0:
-                cands = rank_candidates(self.sig, date, exclude=self.positions.keys())[:slots]
-                notional = position_notional(equity, cfg["stop_loss_pct"], cfg)
-                self.pending_entries = [(s, notional) for s in cands]
+                cands = rank_candidates(self.sig, date, exclude=set(self.positions) | self._cooling(date))[:slots]
+                for s in cands:
+                    sp = self._stop_pct(date, s)
+                    self.pending_entries.append((s, position_notional(equity, sp, cfg), sp))
+
+    def _stop_pct(self, date, sym) -> float:
+        """Cắt lỗ cố định stop_loss_pct, hoặc stop_atr × ATR / giá (giới hạn trong stop_atr_range)."""
+        cfg = self.cfg
+        k = cfg.get("stop_atr")
+        if not k:
+            return cfg["stop_loss_pct"]
+        a, c = self.sig["atr"].at[date, sym], self.p["close"].at[date, sym]
+        if pd.isna(a) or pd.isna(c) or c <= 0:
+            return cfg["stop_loss_pct"]
+        lo, hi = cfg.get("stop_atr_range") or (0.02, 0.25)
+        return float(min(max(float(k) * a / c, lo), hi))
+
+    def _paused(self, date) -> bool:
+        """StoplossGuard và MaxDrawdown (freqtrade): tạm ngừng mở lệnh mới sau chuỗi thua."""
+        cfg, d = self.cfg, pd.Timestamp(date)
+        if self.paused_until and d <= pd.Timestamp(self.paused_until):
+            return True
+        pause = None
+        g = cfg.get("stoploss_guard")      # {count, days, pause_days}
+        if g:
+            lim = d - pd.Timedelta(days=int(g["days"]))
+            if sum(pd.Timestamp(x) > lim for x in self.stop_dates) >= int(g["count"]):
+                pause = int(g["pause_days"])
+                self.stop_dates = []       # đếm lại từ đầu sau khi nghỉ
+        g = cfg.get("drawdown_guard")      # {pct, days, pause_days}
+        if g and self.equity_curve:
+            n = int(g["days"])
+            recent = [r["equity"] for r in self.equity_curve[-n:]]
+            if recent[-1] / max(recent) - 1 <= -float(g["pct"]):
+                pause = max(pause or 0, int(g["pause_days"]))
+        if pause:
+            self.paused_until = str((d + pd.Timedelta(days=pause)).date())
+            return True
+        return False
+
+    def _cooling(self, date) -> set:
+        """Mã vừa thoát lỗ trong `cooldown_days` ngày gần đây: chưa được mua lại."""
+        n = (self.cfg.get("filters") or {}).get("cooldown_days") or 0
+        if not n:
+            return set()
+        lim = pd.Timestamp(date) - pd.Timedelta(days=int(n))
+        return {s for s, d in self.last_loss.items() if pd.Timestamp(d) > lim}
 
     # ---------- chạy cả giai đoạn ----------
     def run(self, start=None, end=None):

@@ -116,6 +116,9 @@ const LIVE_PARAMS = {
   min_volume_usd: 5e6, volume_lookback: 20,
   stop_loss_pct: 0.04, time_stop_days: 2, time_stop_min_gain: 0.03,
   trail_trigger_pct: 0.12, trail_pct: 0.06, fee_pct: 0.001, slippage_pct: 0.002,
+  // giống markets.crypto.filters trong config.yaml
+  filters: {trend_ma: 200, golden_cross: [50, 200], rs_lookback: 20, cooldown_days: 10,
+            breakout_days: 20, min_vol_ratio: 1.5, max_extension: 0.25, min_history: 200},
 };
 let P = LIVE ? LIVE_PARAMS : D.params;
 
@@ -156,6 +159,11 @@ function fmtV(v){
 function sma(a, n){
   const o = new Array(a.length).fill(null); let s = 0;
   for (let i = 0; i < a.length; i++){ s += a[i]; if (i >= n) s -= a[i - n]; if (i >= n - 1) o[i] = s / n; }
+  return o;
+}
+function ema(a, n){
+  const o = new Array(a.length).fill(null), k = 2 / (n + 1); let e = null;
+  for (let i = 0; i < a.length; i++){ e = e == null ? a[i] : a[i] * k + e * (1 - k); if (i >= n - 1) o[i] = e; }
   return o;
 }
 function niceTicks(lo, hi, count){
@@ -787,23 +795,66 @@ function btcRegime(){
   let n = b.t.length; while (n > 0 && b.ct[n - 1] > now) n--;   // bỏ nến ngày chưa đóng
   const cl = b.c.slice(0, n);
   const mL = sma(cl, P.regime_long_ma), mF = sma(cl, P.regime_fast_ma), mS = sma(cl, P.regime_slow_ma);
-  const days = b.t.slice(0, n), ok = [], above = [];
+  const days = b.t.slice(0, n), ok = [], above = [], close = cl;
   for (let i = 0; i < n; i++){
     above.push(mL[i] != null && cl[i] > mL[i]);
     ok.push(above[i] && mF[i] != null && mS[i] != null && mF[i] > mS[i]);
   }
-  return {days, ok, above};
+  return {days, ok, above, close};
 }
 function regimeFor(c, intra){
-  const R = btcRegime(), ok = [], above = [];
+  const R = btcRegime(), ok = [], above = [], bc = [];
   let j = -1;
   for (let i = 0; i < c.t.length; i++){
     const day = c.t[i].slice(0, 10);
     // chỉ số ngày hợp lệ cuối cùng: nến ngày ≤ day, nến trong ngày < day
     while (j + 1 < R.days.length && (intra ? R.days[j + 1] < day : R.days[j + 1] <= day)) j++;
-    ok.push(j >= 0 ? R.ok[j] : null); above.push(j >= 0 ? R.above[j] : null);
+    ok.push(j >= 0 ? R.ok[j] : null); above.push(j >= 0 ? R.above[j] : null); bc.push(j >= 0 ? R.close[j] : null);
   }
-  return {ok, above};
+  return {ok, above, bc};
+}
+
+// Điều kiện vào lệnh của một mã: bộ lọc cơ bản + các bộ lọc thêm trong P.filters (giống strategy/scanner.py).
+// Trả về ok(i) và fails(i) (danh sách lý do chưa đạt, để hiển thị).
+function entryFilters(c, reg, ma5, ma25, avgV, barsPerDay, intra){
+  const f = P.filters || {}, cl = c.c, n = cl.length, rules = [];
+  rules.push([i => avgV[i] != null && avgV[i] * barsPerDay >= P.min_volume_usd, "khối lượng thấp"]);
+  rules.push([i => ma25[i] != null && cl[i] > ma25[i], `giá dưới MA${P.regime_slow_ma}`]);
+  rules.push([i => ma25[i] != null && ma5[i] > ma25[i], `MA${P.regime_fast_ma} dưới MA${P.regime_slow_ma}`]);
+  if (f.trend_ma){
+    const e = ema(cl, f.trend_ma);
+    rules.push([i => e[i] != null && cl[i] > e[i], `giá dưới EMA${f.trend_ma} của mã`]);
+  }
+  if (f.golden_cross){
+    const a = ema(cl, f.golden_cross[0]), b = ema(cl, f.golden_cross[1]);
+    rules.push([i => a[i] != null && b[i] != null && a[i] > b[i], `EMA${f.golden_cross[0]} dưới EMA${f.golden_cross[1]}`]);
+  }
+  if (f.fresh_cross_days){
+    const last = new Array(n).fill(-1e9);
+    for (let i = 1; i < n; i++){
+      const up = ma25[i] != null && ma5[i] > ma25[i], prev = ma25[i - 1] != null && ma5[i - 1] > ma25[i - 1];
+      last[i] = up && !prev ? i : last[i - 1];
+    }
+    rules.push([i => i - last[i] < f.fresh_cross_days, `MA${P.regime_fast_ma} không vừa cắt lên`]);
+  }
+  if (f.breakout_days){
+    const N = f.breakout_days;
+    rules.push([i => { if (i < N - 1) return false; for (let k = i - N + 1; k < i; k++) if (cl[k] > cl[i]) return false; return true; },
+      `chưa lập đỉnh ${N} nến`]);
+  }
+  if (f.rs_lookback){
+    // So với BTC theo nến ngày; khung trong ngày quy đổi N ngày ra số nến.
+    const N = f.rs_lookback, Nb = Math.round(N * (intra ? barsPerDay : 1));
+    rules.push([i => i >= Nb && reg.bc[i] != null && reg.bc[i - Nb] != null &&
+      cl[i] / cl[i - Nb] > reg.bc[i] / reg.bc[i - Nb], `yếu hơn BTC ${N} ngày`]);
+  }
+  if (f.min_vol_ratio){
+    const vb = sma(c.v, P.volume_lookback);
+    rules.push([i => i > 0 && vb[i - 1] && c.v[i] / vb[i - 1] >= f.min_vol_ratio, `khối lượng < ${f.min_vol_ratio}× TB`]);
+  }
+  if (f.max_extension) rules.push([i => ma25[i] != null && cl[i] / ma25[i] - 1 <= f.max_extension, "đã chạy quá xa MA25"]);
+  if (f.min_history) rules.push([i => i + 1 >= f.min_history, `chưa đủ ${f.min_history} nến lịch sử`]);
+  return {ok: i => rules.every(r => r[0](i)), fails: i => rules.filter(r => !r[0](i)).map(r => r[1])};
 }
 
 // Mô phỏng luật vào/ra trên 1 mã (giống backtest/engine.py nhưng không có bước xếp hạng nhiều mã).
@@ -813,6 +864,9 @@ function simulate(sym, c, reg, closedN){
   const timeStopBars = Math.max(1, Math.round(P.time_stop_days * barsPerDay));
   const ma5 = sma(c.c, P.regime_fast_ma), ma25 = sma(c.c, P.regime_slow_ma), avgV = sma(c.v, P.volume_lookback);
   const fee = P.fee_pct, slip = P.slippage_pct;
+  const F = entryFilters(c, reg, ma5, ma25, avgV, barsPerDay, tfMin < 1440);
+  const coolBars = Math.round(((P.filters || {}).cooldown_days || 0) * barsPerDay);
+  let lastLossBar = -1e9;
   let cash = CAPITAL, pos = null, pendExit = null, pendEntry = false, costs = 0;
   const trades = [], eq = [], dd = [], t = [];
   let peak = CAPITAL;
@@ -822,6 +876,7 @@ function simulate(sym, c, reg, closedN){
     cash += proceeds;
     trades.push({s: sym, ed: c.t[pos.ei], xd: c.t[i], ep: pos.ep, xp: fill, ret: proceeds / pos.cost - 1,
       pnl: proceeds - pos.cost, bars: pos.bars, why});
+    if (proceeds <= pos.cost) lastLossBar = i;
     pos = null; pendExit = null;
   };
   for (let i = 0; i < closedN; i++){
@@ -849,8 +904,7 @@ function simulate(sym, c, reg, closedN){
     }
     const e = cash + (pos ? pos.qty * c.c[i] : 0);
     peak = Math.max(peak, e); eq.push(e); dd.push(e / peak - 1); t.push(c.t[i]);
-    if (!pos && reg.ok[i] && avgV[i] != null && avgV[i] * barsPerDay >= P.min_volume_usd &&
-        ma25[i] != null && c.c[i] > ma25[i] && ma5[i] > ma25[i]) pendEntry = true;
+    if (!pos && reg.ok[i] && F.ok(i) && i - lastLossBar > coolBars) pendEntry = true;
   }
   // lệnh đang mở: tính theo giá hiện tại
   const last = c.t.length - 1;
@@ -869,9 +923,8 @@ function simulate(sym, c, reg, closedN){
     const i = closedN - 1, why = [];
     if (i >= 0){
       if (!reg.ok[i]) why.push("bộ lọc BTC chưa cho phép");
-      if (!(ma25[i] != null && c.c[i] > ma25[i])) why.push(`giá dưới MA${P.regime_slow_ma}`);
-      if (!(ma5[i] > ma25[i])) why.push(`MA${P.regime_fast_ma} dưới MA${P.regime_slow_ma}`);
-      if (!(avgV[i] != null && avgV[i] * barsPerDay >= P.min_volume_usd)) why.push("khối lượng thấp");
+      why.push(...F.fails(i));
+      if (i - lastLossBar <= coolBars) why.push("đang nghỉ sau lệnh lỗ");
     }
     signal = {text: "○ ĐỨNG NGOÀI", cls: "", tip: why.join(", ") || "–"};
     if (why.length) signal.text += " · " + why[0];

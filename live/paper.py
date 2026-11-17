@@ -99,8 +99,8 @@ def main():
         print("  (không có)")
     for sym, reason in eng.pending_exits.items():
         print(f"  BÁN {sym:<14} lý do: {reason}")
-    for sym, notional in eng.pending_entries:
-        print(f"  MUA {sym:<14} ~{notional:,.2f} {ccy}, cắt lỗ -{cfg['stop_loss_pct']:.0%}")
+    for sym, notional, stop_pct in eng.pending_entries:
+        print(f"  MUA {sym:<14} ~{notional:,.2f} {ccy}, cắt lỗ -{stop_pct:.1%}")
 
 
 if __name__ == "__main__":

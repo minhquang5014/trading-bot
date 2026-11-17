@@ -8,3 +8,5 @@ live/paper_*.csv
 !backtest/chart_template.html
 .DS_Store
 data/*.log
+clone_repo/repos/
+clone_repo/results/

@@ -14,6 +14,26 @@ max_positions: 10
 momentum_lookback: 5
 volume_lookback: 20
 
+# Bộ lọc vào lệnh thêm (xem strategy/scanner.py). null / 0 = tắt. Mỗi thị trường có thể ghi đè cả khối.
+filters:
+  trend_ma: 200            # mã phải trên EMA200 của chính nó (PTJ cho từng mã)
+  golden_cross: [50, 200]  # EMA50 > EMA200 (xu hướng trung hạn)
+  rs_lookback: 20          # mạnh hơn chỉ số chuẩn trong 20 phiên
+  cooldown_days: 10        # vừa lỗ ở mã nào thì 10 ngày không mua lại mã đó
+  breakout_days: null      # đóng cửa cao nhất N phiên
+  min_vol_ratio: null      # khối lượng hôm nay ≥ x lần trung bình
+  max_extension: null      # giá không cách MA25 quá x (0.25 = 25%)
+  min_history: null        # ít nhất N nến lịch sử
+  fresh_cross_days: null   # MA5 vừa cắt lên MA25 trong N phiên
+  # Đề xuất README mục 9 (mặc định tắt):
+  pullback: null           # {fast: 21, slow: 50, lookback: 5, rsi_max: 45, rsi_min: 50}: chờ hồi về EMA21 rồi vào
+  max_dist_atr: null       # không đuổi giá: close - EMA21 ≤ x ATR
+  ema_slope: null          # [200, 5]: EMA200 cao hơn 5 phiên trước
+  adx_min: null            # ADX ≥ x và +DI > -DI
+  max_rsi: null            # RSI14 < x
+  max_vol_ratio: null      # bỏ nến khối lượng > x lần trung bình
+rank_by: momentum_volume   # momentum_volume (gốc) | momentum (không thưởng điểm khối lượng đột biến)
+
 # Quản lý rủi ro
 initial_capital: 10000
 position_pct: 0.02       # mỗi lệnh tối đa 2% vốn (1/50); null = 1 / max_positions
@@ -23,6 +43,15 @@ time_stop_days: 2        # tính theo số phiên giao dịch
 time_stop_min_gain: 0.03
 trail_trigger_pct: 0.12
 trail_pct: 0.06
+exit_ma: 5               # thoát khi đóng cửa dưới MA này ("gãy đà"); 0 = tắt
+stop_atr: null           # cắt lỗ = x × ATR14 thay cho stop_loss_pct; chia vốn theo rủi ro tự giảm cho mã biến động mạnh
+stop_atr_range: [0.02, 0.25]   # giới hạn % cắt lỗ khi dùng stop_atr
+atr_period: 14
+breakeven_r: null        # lời đạt x R (R = khoảng cắt lỗ ban đầu) thì dời cắt lỗ về giá vào
+breakeven_offset_pct: 0.0
+take_profit_r: null      # chốt lời ở x R
+stoploss_guard: null     # {count: 3, days: 10, pause_days: 5}: 3 lần cắt lỗ trong 10 ngày → nghỉ 5 ngày
+drawdown_guard: null     # {pct: 0.10, days: 30, pause_days: 10}: vốn sụt 10% so với đỉnh 30 ngày → nghỉ 10 ngày
 min_order_usd: 10
 
 # Chi phí (tính vào backtest)
@@ -45,6 +74,16 @@ markets:
     exclude_bases: [USDC, BUSD, TUSD, FDUSD, DAI, USDP, PAX, UST, USDD, PYUSD, USDS, USD1,
                     EUR, GBP, AUD, TRY, BRL, AEUR, EURI, WBTC, WBETH, BETH, BTC]
     quote_ccy: USDT
+    # Altcoin nhiễu hơn nhiều: dùng đủ bộ lọc (backtest 2020–2026: lệnh 6420 → 859, MDD -78% → -15%).
+    filters:
+      trend_ma: 200
+      golden_cross: [50, 200]
+      rs_lookback: 20
+      cooldown_days: 10
+      breakout_days: 20
+      min_vol_ratio: 1.5
+      max_extension: 0.25
+      min_history: 200
 
   us_stocks:
     source: yfinance
@@ -58,6 +97,25 @@ markets:
     slippage_pct: 0.0005
     periods_per_year: 252
     quote_ccy: USD
+    # Ghép các đề xuất README mục 9 (backtest/ablation.py: 11/12 năm lời khi chạy riêng từng năm, PF 1,34).
+    # Vào lệnh khi hồi về EMA21, cắt lỗ 2 ATR, hoà vốn ở 1R, chốt lời 2,5R, không còn time stop 2 ngày / thoát dưới MA5.
+    stop_atr: 2.0
+    breakeven_r: 1.0
+    take_profit_r: 2.5
+    time_stop_days: 10000
+    exit_ma: 0
+    rank_by: momentum
+    stoploss_guard: {count: 3, days: 10, pause_days: 5}
+    drawdown_guard: {pct: 0.10, days: 30, pause_days: 10}
+    filters:
+      trend_ma: 200
+      golden_cross: [50, 200]
+      rs_lookback: 20
+      cooldown_days: 10
+      pullback: {fast: 21, slow: 50, lookback: 5, rsi_max: null, rsi_min: null}
+      ema_slope: [200, 5]
+      adx_min: 25
+      max_rsi: 70
 
   # Sau này: vàng / forex (cùng nguồn yfinance). Lưu ý: forex trên Yahoo không có khối lượng,
   # nên phải đặt min_volume_usd: 0 và xếp hạng chỉ theo đà tăng.

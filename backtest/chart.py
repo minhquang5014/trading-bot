@@ -81,7 +81,7 @@ def build(cfg: dict, symbols=None, top: int = 30, start=None, end=None) -> dict:
         "params": {k: cfg.get(k) for k in ("max_positions", "position_pct", "stop_loss_pct", "time_stop_days",
                                            "time_stop_min_gain", "trail_trigger_pct", "trail_pct",
                                            "regime_fast_ma", "regime_slow_ma", "regime_long_ma",
-                                           "fee_pct", "slippage_pct")},
+                                           "fee_pct", "slippage_pct", "filters")},
         "summary": {
             "start": str(s["start"]), "end": str(s["end"]), "capital": cfg["initial_capital"],
             "final": round(s["final_equity"], 2), "ret": pct(s["total_return"]), "cagr": pct(s["cagr"]),

@@ -16,6 +16,11 @@ class Position:
     last_price: float
     bars_held: int = 0
     trailing: bool = False
+    risk_pct: float = 0.0     # khoảng cách cắt lỗ ban đầu theo % giá vào (1R); 0 = trạng thái cũ, dùng stop_loss_pct
+    breakeven: bool = False
+
+    def r_pct(self, cfg) -> float:
+        return self.risk_pct or cfg["stop_loss_pct"]
 
     def to_dict(self):
         return asdict(self)
@@ -30,9 +35,27 @@ def check_stop(pos: Position, open_: float, low: float):
     return None
 
 
+def check_take_profit(pos: Position, open_: float, high: float, cfg: dict):
+    """Chốt lời ở entry + take_profit_r × R (lệnh limit). Mở cửa đã vượt mức chốt thì khớp ở giá mở cửa."""
+    r = cfg.get("take_profit_r")
+    if not r:
+        return None
+    tp = pos.entry_price * (1 + float(r) * pos.r_pct(cfg))
+    if open_ >= tp:
+        return open_
+    if high >= tp:
+        return tp
+    return None
+
+
 def update_trailing(pos: Position, high: float, cfg: dict) -> None:
     """Gọi lúc đóng cửa. Điểm cắt lỗ mới chỉ có hiệu lực từ phiên sau."""
     pos.highest = max(pos.highest, high)
+    be = cfg.get("breakeven_r")
+    if be and not pos.breakeven and pos.highest >= pos.entry_price * (1 + float(be) * pos.r_pct(cfg)):
+        # Dời cắt lỗ về hoà vốn (cộng thêm breakeven_offset_pct để bù phí).
+        pos.breakeven = True
+        pos.stop = max(pos.stop, pos.entry_price * (1 + float(cfg.get("breakeven_offset_pct") or 0)))
     if not pos.trailing and pos.highest >= pos.entry_price * (1 + cfg["trail_trigger_pct"]):
         pos.trailing = True
     if pos.trailing:
