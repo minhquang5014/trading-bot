@@ -6,3 +6,7 @@ pyyaml
 # quantstats
 yfinance
 lxml
+# Bot Telegram + MT5 (telegram_bot/bot.py)
+MetaTrader5; sys_platform == "win32"
+matplotlib
+requests

@@ -62,7 +62,7 @@ class Engine:
         self.sub = None
         if sub is not None:
             self.sub = tuple(sub[k].to_numpy(float) for k in ("open", "high", "low", "close"))
-            edges = np.append(self.t.values, self.t[-1] + (self.t[-1] - self.t[-2]))
+            edges = np.append(self.t.values, (self.t[-1] + (self.t[-1] - self.t[-2])).to_datetime64())
             self.sub_lo = np.searchsorted(sub.index.values, edges[:-1])
             self.sub_hi = np.searchsorted(sub.index.values, edges[1:])
         self.spread, self.capital, self.lev, self.maxpos = spread, capital, leverage, max_positions

@@ -10,3 +10,4 @@ live/paper_*.csv
 data/*.log
 clone_repo/repos/
 clone_repo/results/
+.env

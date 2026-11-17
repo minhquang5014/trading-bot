@@ -124,3 +124,16 @@ markets:
   #   benchmark: DX-Y.NYB
   #   universe: [GC=F, SI=F, EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X]
   #   data_dir: data/csv/macro
+
+# ==== Bot Telegram + MT5 (telegram_bot/bot.py). Bí mật (login, token) nằm trong .env ====
+mt5_bot:
+  symbol: XAUUSD              # tên gốc; bot tự thử các biến thể của broker (XAUUSD.r, GOLD, ...)
+  display_tz: Asia/Ho_Chi_Minh
+  chart_tf: M15
+  chart_bars: 150
+  max_lot: 0.10               # chặn lệnh quá cỡ (cả lệnh tay và lệnh từ tín hiệu)
+  signals: true               # cảnh báo PDH/PDL M5 khi khởi động (/signals on|off để đổi)
+  signal_risk_pct: 1.0        # % số dư rủi ro cho lệnh từ tín hiệu
+  signal_confirm_minutes: 5   # quá thời gian này thì nút đặt lệnh hết hạn
+  confirm_seconds: 60         # hạn bấm xác nhận lệnh tay
+  magic: 50140

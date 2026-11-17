@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def load_config(path=None, market=None, **overrides):
     """Gộp tham số chung + tham số của một thị trường + ghi đè từ dòng lệnh."""
     path = Path(path) if path else ROOT / "config.yaml"
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     markets = raw.pop("markets", {}) or {}
     market = market or raw.get("default_market") or next(iter(markets), None)
@@ -24,5 +24,5 @@ def load_config(path=None, market=None, **overrides):
 
 def list_markets(path=None):
     path = Path(path) if path else ROOT / "config.yaml"
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return list((yaml.safe_load(f).get("markets") or {}).keys())

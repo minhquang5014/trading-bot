@@ -130,6 +130,71 @@ shotgun-momentum/
 └── README.md
 ```
 
+## 3b. Bot Telegram + MT5 (PF Markets)
+
+> 🚧 **Đang làm, chưa chạy thử với broker thật.** Code mới chỉ qua kiểm tra cú pháp. Bước tiếp theo: cài MT5 của PF Markets, chạy `--check`, rồi test từng lệnh trên tài khoản **demo**.
+
+Bot Telegram điều khiển tài khoản MT5: xem giá, xem biểu đồ vàng mới nhất từ broker, xem tài khoản, đặt/đóng lệnh và nhận cảnh báo tín hiệu PDH/PDL.
+
+```
+broker/mt5_client.py       # kết nối MT5 (thư viện MetaTrader5): nến, tick, tài khoản, đặt/đóng/sửa lệnh, tính lot theo rủi ro
+telegram_bot/bot.py        # vòng lặp bot, các lệnh /chart /buy ..., xác nhận bằng nút bấm
+telegram_bot/telegram_api.py  # gọi Telegram Bot API (long polling, một luồng)
+telegram_bot/chart.py      # vẽ nến PNG: EMA50/200, PDH/PDL, giá vào / SL / TP của lệnh đang mở
+telegram_bot/signals.py    # tín hiệu PDH/PDL trên nến M5, dùng lại lớp PdhPdl đã backtest trong clone_repo/
+.env.example               # mẫu file bí mật (login MT5, token Telegram)
+```
+
+### Cài đặt (Windows)
+
+1. Cài **terminal MT5 của PF Markets**, đăng nhập tài khoản demo, bật *Tools → Options → Expert Advisors → Allow algorithmic trading*. Terminal phải luôn mở khi bot chạy (thư viện `MetaTrader5` điều khiển terminal, broker không có API web riêng).
+2. Tạo bot Telegram: nhắn `@BotFather` → `/newbot` → lấy token.
+3. `copy .env.example .env` rồi điền `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` (đúng tên server trong MT5) và `TELEGRAM_BOT_TOKEN`. File `.env` đã nằm trong `.gitignore`.
+4. Cài thư viện. Trên Windows cần `PYTHONUTF8=1` vì `requirements.txt` có chữ tiếng Việt:
+   ```powershell
+   $env:PYTHONUTF8 = "1"
+   .venv\Scripts\python -m pip install -r requirements.txt
+   ```
+5. Lấy chat id: để trống `TELEGRAM_ALLOWED_CHAT_IDS`, chạy bot, nhắn `/id`, rồi điền số nhận được vào `.env`.
+6. Kiểm tra kết nối, sau đó chạy bot:
+   ```powershell
+   .venv\Scripts\python telegram_bot\bot.py --check
+   .venv\Scripts\python telegram_bot\bot.py
+   ```
+
+### Lệnh Telegram
+
+| Lệnh | Việc làm |
+|---|---|
+| `/chart [M5\|M15\|H1\|H4\|D1] [số nến] [mã]` | Biểu đồ mới nhất từ broker (mặc định M15, 150 nến), giờ Việt Nam |
+| `/price [mã]` | Bid / ask / spread |
+| `/account` | Số dư, equity, margin |
+| `/positions` | Lệnh đang mở |
+| `/buy 0.01 [sl] [tp]`, `/sell ...` | Đặt lệnh thị trường. `/buy 1% 4050` thì lot được tính theo 1% rủi ro (bắt buộc có SL) |
+| `/close <ticket\|all>` | Đóng lệnh |
+| `/signals on\|off` | Bật/tắt cảnh báo PDH/PDL M5 |
+| `/id` | Xem chat id |
+
+Tham số không bí mật nằm trong `config.yaml`, khoá `mt5_bot` (mã, múi giờ, `max_lot`, % rủi ro cho tín hiệu...).
+
+### Cảnh báo tín hiệu
+
+Mỗi khi một nến M5 đóng, bot chạy logic PDH/PDL (phá đỉnh/đáy hôm qua rồi retest, xem `clone_repo/README.md`). Khi có tín hiệu, bot gửi giá vào, SL (1 ATR), TP1 (1,5R) và TP2 (3R), kèm lot tính theo `signal_risk_pct`. Bot **không tự vào lệnh**: muốn vào thì bấm *Xác nhận* trong 5 phút. Sau khi khớp, bot tính lại SL/TP theo giá khớp thật và tự chốt 50% khi giá chạm TP1. Lưu ý: backtest chiến lược này chỉ có 37 lệnh trong 6 năm (PF 1,21 ở spread $0,30, PF 1,02 ở spread $0,50), quá ít để tin là có lợi thế.
+
+### An toàn
+
+- Chỉ các chat id trong `TELEGRAM_ALLOWED_CHAT_IDS` dùng được bot; chat khác chỉ nhận được `/id`.
+- Mọi lệnh đặt/đóng đều phải bấm nút xác nhận, hết hạn sau 60 giây.
+- Tài khoản **thật** bị khoá đặt lệnh, trừ khi đặt `ALLOW_LIVE_TRADING=true`.
+- `max_lot` chặn mọi lệnh vượt cỡ.
+
+### Việc còn lại
+
+- [ ] Cài MT5 PF Markets, chạy `--check` (tên mã vàng, độ lệch giờ server, kiểu khớp lệnh).
+- [ ] Test `/chart`, `/price`, `/account`, rồi `/buy 0.01` + `/close` trên demo.
+- [ ] So tín hiệu PDH/PDL live với backtest. Bài test offline (tín hiệu live có khớp đúng các nến của backtest không) đang dở.
+- [ ] Chưa có: tự chạy lại khi máy khởi động, log lệnh ra CSV.
+
 ## 4. Công nghệ
 
 | Phần | Thư viện | Lý do |
