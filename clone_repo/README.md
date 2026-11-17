@@ -123,4 +123,8 @@ Luật: RSI(2) < 10 thì mua, RSI(2) > 90 thì bán, khớp ở giá mở nến 
 - Lọc "chỉ khi đi ngang" theo ADX lại làm kết quả **kém hơn**.
 - Vàng hoà ở mọi biến thể. Khung H4 và H1 lỗ vì chi phí giao dịch.
 
-Kiểm tra dữ liệu PAXG so với GC=F (2021–2026): tương quan lợi nhuận ngày 0,84, chênh giá trung bình 0,75%, biên độ ngày 1,76% so với 1,66%. PAXG chỉ là dữ liệu thay thế cho XAUUSD. Các EA vào lệnh theo giờ trong ngày (killzone, FVG trên M5) nên được kiểm lại bằng MT5 Strategy Tester với tick thật của broker.
+Kiểm tra dữ liệu PAXG so với GC=F:
+- Theo nến 15 phút: tương quan lợi nhuận 0,977.
+- Theo ngày: tương quan chỉ 0,84, vì GC=F chốt nến lúc 17h New York còn PAXG chốt lúc 0h UTC. Chênh giá trung bình 0,75%. Biên độ ngày 1,76% so với 1,66%.
+
+Như vậy dữ liệu thay thế đủ tốt để kết luận. Nếu muốn chắc tuyệt đối, có thể chạy lại EA gốc bằng MT5 Strategy Tester với tick thật của broker.
