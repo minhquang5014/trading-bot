@@ -62,10 +62,20 @@ def build(cfg: dict, symbols=None, top: int = 30, start=None, end=None) -> dict:
         data[sym] = candles_payload(df)
 
     tr = trades[trades["symbol"].isin(symbols)] if not trades.empty else trades
+    tp_r = cfg.get("take_profit_r")
+
+    def levels(r):
+        """Cắt lỗ ban đầu và mức chốt lời theo R của từng lệnh (cắt lỗ ATR khác nhau theo mã)."""
+        rp = float(getattr(r, "risk_pct", None) or cfg["stop_loss_pct"])
+        out = {"sl": float(f"{r.entry_price * (1 - rp):.6g}")}
+        if tp_r:
+            out["tp"] = float(f"{r.entry_price * (1 + float(tp_r) * rp):.6g}")
+        return out
+
     trade_rows = [] if tr.empty else [
         {"s": r.symbol, "ed": r.entry_date, "xd": r.exit_date, "ep": float(f"{r.entry_price:.6g}"),
          "xp": float(f"{r.exit_price:.6g}"), "ret": round(float(r.ret), 4), "pnl": round(float(r.pnl), 2),
-         "bars": int(r.bars_held), "why": r.reason}
+         "bars": int(r.bars_held), "why": r.reason, **levels(r)}
         for r in tr.itertuples()
     ]
 
@@ -81,7 +91,10 @@ def build(cfg: dict, symbols=None, top: int = 30, start=None, end=None) -> dict:
         "params": {k: cfg.get(k) for k in ("max_positions", "position_pct", "stop_loss_pct", "time_stop_days",
                                            "time_stop_min_gain", "trail_trigger_pct", "trail_pct",
                                            "regime_fast_ma", "regime_slow_ma", "regime_long_ma",
-                                           "fee_pct", "slippage_pct", "filters")},
+                                           "fee_pct", "slippage_pct", "stop_atr", "stop_atr_range",
+                                           "breakeven_r", "take_profit_r", "exit_ma", "rank_by",
+                                           "stoploss_guard", "drawdown_guard", "filters")
+                   if cfg.get(k) is not None},
         "summary": {
             "start": str(s["start"]), "end": str(s["end"]), "capital": cfg["initial_capital"],
             "final": round(s["final_equity"], 2), "ret": pct(s["total_return"]), "cagr": pct(s["cagr"]),

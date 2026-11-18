@@ -102,7 +102,7 @@ Bản ghép đang lời với cổ phiếu Mỹ (hồi về EMA21, cắt lỗ 2 
 - Bộ lọc "không đánh khi đi ngang" giảm lỗ rõ (bớt ~2/3 số lệnh), nhưng không tự tạo ra lợi thế.
 - Khung càng ngắn càng lỗ: spread chiếm phần lớn hơn của 1R.
 - Lưới 24 tham số D1: forex lỗ hoặc hoà ở hầu hết; vàng lời ở cả 24, nhưng lời gần như chỉ từ 3 lệnh mua giữ nhiều tháng (2006, 2011, 2026), lệnh bán ≈ 0R, tức là ăn theo đà tăng dài của vàng.
-- Chưa tính swap qua đêm.
+- Chưa tính swap qua đêm (riêng `mean_reversion.py` đã tính).
 
 ## Bot hồi về trung bình 2 chiều (mean_reversion.py)
 
@@ -119,7 +119,10 @@ Luật: RSI(2) < 10 thì mua, RSI(2) > 90 thì bán, khớp ở giá mở nến 
 - Biến thể **thuận xu hướng dài trên D1** có lời ở 17/18 bộ tham số (PF 0,99–1,48). Bộ tốt nhất là RSI(3) 10/90, thoát ở SMA10: forex +54R, PF 1,26.
   - Lợi thế này còn khi spread ×3 (PF 1,20).
   - Lợi thế yếu dần: PF 1,60 giai đoạn 2003–2010, chỉ còn PF 1,15 từ 2011.
-  - Mỗi lệnh chỉ lời trung bình +0,07R và giữ khoảng 8 ngày, nên swap có thể ăn bớt một phần.
+  - Mỗi lệnh chỉ lời trung bình +0,07R và giữ khoảng 8 ngày.
+  - **Sau swap**, ước lượng từ lãi suất điều hành từng năm cộng phí broker: forex còn +50R (phí broker 0,5%/năm), +45R (1%) hoặc +35R (2%), PF 1,17–1,24. Swap chỉ ăn khoảng 0,4R mỗi năm.
+  - Năm tốt nhất +10R (2007, 2025), năm tệ nhất −10,7R (2024). Lời 14/23 năm.
+  - Tính trung bình chỉ khoảng **+2R mỗi năm** cho cả 10 cặp, tức khoảng +2%/năm nếu rủi ro 1% mỗi lệnh. Lợi thế có thật nhưng mỏng.
 - Lọc "chỉ khi đi ngang" theo ADX lại làm kết quả **kém hơn**.
 - Vàng hoà ở mọi biến thể. Khung H4 và H1 lỗ vì chi phí giao dịch.
 

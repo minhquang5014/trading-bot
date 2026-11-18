@@ -164,13 +164,26 @@ Ghi chú triển khai:
 
 ## 6. Cần kiểm tra trong backtest
 
-- [ ] So với chỉ mua giữ BTC, chiến lược có thắng sau khi trừ phí không?
-- [ ] Sụt giảm lớn nhất có chấp nhận được không (mục tiêu dưới 25%)?
-- [ ] Lời trung bình / lỗ trung bình có đạt ≥ 3 không?
-- [ ] Bỏ riêng bộ lọc 200 ngày thì kết quả tệ hơn bao nhiêu?
-- [ ] Đổi 10 mã thành 5 hoặc 15 mã thì kết quả có ổn định không, hay chỉ đẹp ở đúng một con số?
-- [ ] Test riêng từng giai đoạn: thị trường lên 2021, xuống 2022, đi ngang 2023.
-- [ ] Danh sách altcoin phải gồm cả những mã **đã bị gỡ khỏi sàn**, nếu không kết quả sẽ đẹp giả (lỗi "chỉ nhìn kẻ sống sót").
+Kết quả với cấu hình hiện tại trong `config.yaml`, chạy bằng `python backtest/engine.py --market <thị trường> --experiments`.
+Crypto tính từ 2020, cổ phiếu Mỹ từ 2015.
+
+- [x] **Có thắng chỉ mua giữ sau phí không?** Không, ở cả hai thị trường.
+  - Crypto: −14,6%, trong khi giữ BTC +925%.
+  - Cổ phiếu Mỹ: +21,7%, trong khi giữ SPY +345%.
+  - Bù lại, bot sụt giảm ít hơn nhiều: −3,4% so với −33,7% của SPY.
+- [x] **Sụt giảm lớn nhất dưới 25%?** Có. Crypto −15%, cổ phiếu Mỹ −3,4%.
+- [x] **Lời TB / lỗ TB ≥ 3?** Chưa đạt. Crypto 2,31, cổ phiếu Mỹ 2,97.
+- [x] **Bỏ riêng bộ lọc 200 ngày thì sao?** Kết quả kém hơn một chút.
+  - Crypto: −15,8% so với −14,6%.
+  - Cổ phiếu Mỹ: +19,0% so với +21,7%, MDD −4,8% so với −3,4%.
+- [x] **Đổi số mã có ổn định không?**
+  - Crypto lỗ với cả 5, 10 và 15 mã.
+  - Cổ phiếu Mỹ lời với cả ba: +8% (5 mã), +22% (10 mã), +24% (15 mã), MDD đều dưới 5%.
+- [x] **Test riêng từng giai đoạn:**
+  - Crypto: 2021 −3,1%, 2022 không có lệnh (bộ lọc chặn hết), 2023 −1,3%.
+  - Cổ phiếu Mỹ: lời khoảng +1% mỗi năm 2021, 2022 và 2023.
+  - Kết quả chạy riêng từng năm ở mục 9.
+- [ ] **Chưa làm: danh sách mã phải gồm cả mã đã bị gỡ khỏi sàn.** Hiện chỉ có các mã còn sống, nên kết quả có thể đẹp hơn thực tế (lỗi "chỉ nhìn kẻ sống sót"). Với cổ phiếu Mỹ, cần danh sách thành phần S&P 500 lịch sử.
 
 ### Kết quả thử bộ lọc ($1000, 2% mỗi lệnh, phí đã trừ)
 
@@ -257,4 +270,7 @@ Mỗi ý là một tuỳ chọn trong `config.yaml` (mặc định tắt): `filt
 
 **Lưu ý:**
 - Danh sách cổ phiếu Mỹ vẫn bị lỗi "chỉ nhìn kẻ sống sót" (mục 6).
-- Biểu đồ `backtest/chart.py` mô phỏng lại bằng JavaScript và **chưa có** các tuỳ chọn mới, nên với `us_stocks` biểu đồ sẽ khác backtest.
+- Biểu đồ `backtest/chart.py` đã có đủ các tuỳ chọn mới.
+  - **Chế độ backtest:** vẽ đúng mức cắt lỗ ATR và mức chốt lời theo R của từng lệnh.
+  - **Chế độ live:** phần mô phỏng JS có các bộ lọc mới (hồi EMA21, ATR, EMA dốc, ADX, RSI, khối lượng), cắt lỗ ATR, hoà vốn, chốt lời theo R và các guard. Có thêm ô chọn bộ luật: "Luật crypto" hoặc "Ghép mục 9".
+  - Đã đối chiếu từng lệnh giữa JS và engine Python trên 8 cổ phiếu và 4 coin, chạy riêng từng mã: trùng 100%.
