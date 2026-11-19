@@ -15,6 +15,10 @@ sys.path.insert(0, str(ROOT / "clone_repo"))
 
 from gold_repos_m5 import PdhPdl  # noqa: E402
 
+# Số nến M5 bot lấy mỗi lần: EMA200 khung H1 cần ~600 nến H1 (= 7200 nến M5) mới hội tụ giống backtest.
+# Với 1000 nến, xu hướng H1 có thể sai và bỏ sót tín hiệu (telegram_bot/test_signals.py).
+M5_BARS = 10000
+
 
 class _StubEngine:
     """Đủ thuộc tính cho PdhPdl.on_bar: không có lệnh mở, vốn không đổi (bỏ luật dừng khi lỗ 3%/ngày)."""
@@ -44,7 +48,7 @@ class Signal:
 
 
 def pdh_pdl_signal(m5):
-    """m5: nến M5 đã đóng (index UTC), ít nhất ~3 ngày. Trả về Signal nếu nến cuối cùng cho tín hiệu."""
+    """m5: nến M5 đã đóng (index UTC), nên dài M5_BARS nến. Trả về Signal nếu nến cuối cùng cho tín hiệu."""
     if len(m5) < 600:
         return None
     strat = PdhPdl(m5)

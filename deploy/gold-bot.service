@@ -1,0 +1,20 @@
+# systemd: tự chạy bot khi máy Linux khởi động và tự chạy lại khi bot dừng.
+#   sudo cp deploy/gold-bot.service /etc/systemd/system/
+#   (sửa User và đường dẫn bên dưới nếu khác)
+#   sudo systemctl daemon-reload && sudo systemctl enable --now gold-bot
+#   journalctl -u gold-bot -f        # xem log
+[Unit]
+Description=Telegram gold bot (MetaApi)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading-bot
+Environment=PYTHONUTF8=1 PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/trading-bot/.venv/bin/python telegram_bot/bot.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

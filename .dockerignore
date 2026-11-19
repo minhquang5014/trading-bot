@@ -1,0 +1,9 @@
+.env
+.venv
+.git
+data
+live
+**/__pycache__
+clone_repo/repos
+clone_repo/results
+backtest/results

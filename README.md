@@ -132,35 +132,84 @@ shotgun-momentum/
 
 ## 3b. Bot Telegram + MT5 (PF Markets)
 
-> 🚧 **Đang làm, chưa chạy thử với broker thật.** Code mới chỉ qua kiểm tra cú pháp. Bước tiếp theo: cài MT5 của PF Markets, chạy `--check`, rồi test từng lệnh trên tài khoản **demo**.
+> 🚧 **Chưa chạy thử với broker thật.** Đã test offline: tín hiệu khớp backtest; bot chạy được với cả MT5 lẫn MetaApi giả lập. Bước tiếp theo: tạo tài khoản MetaApi, chạy `--check`, rồi test từng lệnh trên tài khoản **demo**.
 
 Bot Telegram điều khiển tài khoản MT5: xem giá, xem biểu đồ vàng mới nhất từ broker, xem tài khoản, đặt/đóng lệnh và nhận cảnh báo tín hiệu PDH/PDL.
 
+Có hai cách kết nối broker, chọn bằng `BROKER` trong `.env`. Code bot giống hệt nhau ở cả hai cách.
+
+| | `BROKER=metaapi` (mặc định) | `BROKER=mt5` |
+|---|---|---|
+| MT5 chạy ở đâu | Trên cloud của [MetaApi](https://metaapi.cloud) | Terminal trên máy bạn / VPS Windows |
+| Bot chạy ở đâu | Bất kỳ đâu: Linux, cloud miễn phí, Docker, Windows, Mac | Chỉ Windows, cùng máy với terminal |
+| Chi phí | MetaApi có gói miễn phí giới hạn (xem giá trên trang) + hosting Linux rẻ/miễn phí | VPS Windows khoảng 10–30 USD/tháng nếu không muốn bật máy |
+| Mật khẩu MT5 | Phải đưa **mật khẩu master** cho MetaApi | Chỉ nằm trên máy bạn |
+
 ```
-broker/mt5_client.py       # kết nối MT5 (thư viện MetaTrader5): nến, tick, tài khoản, đặt/đóng/sửa lệnh, tính lot theo rủi ro
+broker/__init__.py         # make_client(): chọn MetaApi hoặc MT5 theo BROKER
+broker/metaapi_client.py   # MetaApi (SDK metaapi-cloud-sdk), cùng giao diện với mt5_client
+broker/mt5_client.py       # MT5 trực tiếp (thư viện MetaTrader5, chỉ Windows)
 telegram_bot/bot.py        # vòng lặp bot, các lệnh /chart /buy ..., xác nhận bằng nút bấm
 telegram_bot/telegram_api.py  # gọi Telegram Bot API (long polling, một luồng)
 telegram_bot/chart.py      # vẽ nến PNG: EMA50/200, PDH/PDL, giá vào / SL / TP của lệnh đang mở
 telegram_bot/signals.py    # tín hiệu PDH/PDL trên nến M5, dùng lại lớp PdhPdl đã backtest trong clone_repo/
-.env.example               # mẫu file bí mật (login MT5, token Telegram)
+telegram_bot/test_signals.py  # kiểm tra offline: tín hiệu live có khớp backtest không
+requirements-bot.txt       # thư viện tối thiểu cho bot (cloud / Docker)
+Dockerfile, deploy/gold-bot.service  # chạy trên Linux: Docker hoặc systemd
+scripts/run_bot.ps1        # Windows: chạy bot, tự khởi động lại khi bot dừng, ghi log live/logs/
+scripts/install_autostart.ps1 # Windows: tự chạy bot khi đăng nhập
+.env.example               # mẫu file bí mật (token MetaApi / login MT5, token Telegram)
 ```
 
-### Cài đặt (Windows)
+### Bước 1: Lấy các khoá
 
-1. Cài **terminal MT5 của PF Markets**, đăng nhập tài khoản demo, bật *Tools → Options → Expert Advisors → Allow algorithmic trading*. Terminal phải luôn mở khi bot chạy (thư viện `MetaTrader5` điều khiển terminal, broker không có API web riêng).
-2. Tạo bot Telegram: nhắn `@BotFather` → `/newbot` → lấy token.
-3. `copy .env.example .env` rồi điền `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` (đúng tên server trong MT5) và `TELEGRAM_BOT_TOKEN`. File `.env` đã nằm trong `.gitignore`.
-4. Cài thư viện. Trên Windows cần `PYTHONUTF8=1` vì `requirements.txt` có chữ tiếng Việt:
-   ```powershell
-   $env:PYTHONUTF8 = "1"
-   .venv\Scripts\python -m pip install -r requirements.txt
-   ```
-5. Lấy chat id: để trống `TELEGRAM_ALLOWED_CHAT_IDS`, chạy bot, nhắn `/id`, rồi điền số nhận được vào `.env`.
-6. Kiểm tra kết nối, sau đó chạy bot:
-   ```powershell
-   .venv\Scripts\python telegram_bot\bot.py --check
-   .venv\Scripts\python telegram_bot\bot.py
-   ```
+**Tài khoản MT5 demo (PF Markets).** Trong app hoặc Client Portal của PF Markets: *Accounts → Open account → MetaTrader 5 → Demo*. Ghi lại **login** (chỉ có số), **mật khẩu master** (không phải mật khẩu investor, vì investor chỉ xem được, không đặt lệnh được) và **server**.
+
+**MetaApi** (khi `BROKER=metaapi`):
+1. Đăng ký tại metaapi.cloud.
+2. Vào *Accounts → Add account*, nhập login, mật khẩu master và server ở trên (platform MT5). Đợi trạng thái chuyển sang *Deployed / Connected*.
+3. Copy **id** của tài khoản (dạng `xxxxxxxx-xxxx-...`) vào `METAAPI_ACCOUNT_ID`.
+4. Vào *API access* tạo **token**, copy vào `METAAPI_TOKEN`.
+
+**Telegram.** Nhắn `@BotFather` → `/newbot` → đặt tên và username (username phải kết thúc bằng `bot`). Copy token nhận được vào `TELEGRAM_BOT_TOKEN`.
+
+Mọi khoá chỉ điền vào `.env` (`copy .env.example .env`). File này nằm trong `.gitignore`. Nếu token lộ, nhắn `/revoke` cho BotFather để đổi token mới, và xoá token trên MetaApi.
+
+### Bước 2: Chạy thử trên máy
+
+```powershell
+$env:PYTHONUTF8 = "1"                      # Windows: requirements có chữ tiếng Việt
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python telegram_bot\bot.py   # để trống TELEGRAM_ALLOWED_CHAT_IDS → nhắn /id cho bot → điền số vào .env
+.venv\Scripts\python telegram_bot\bot.py --check   # Telegram OK, Broker OK ... DEMO, giá vàng
+.venv\Scripts\python telegram_bot\bot.py
+```
+
+Với MetaApi, lần kết nối đầu tiên có thể mất 1–2 phút, vì MetaApi phải bật terminal trên cloud.
+
+### Bước 3: Chạy 24/7
+
+**Trên cloud Linux** (`BROKER=metaapi`). Có thể dùng Oracle Cloud Always Free, Google Cloud e2-micro hoặc VPS Linux rẻ. Dùng một trong hai cách:
+
+- systemd:
+  ```bash
+  git clone <repo> ~/trading-bot && cd ~/trading-bot
+  python3 -m venv .venv && .venv/bin/pip install -r requirements-bot.txt
+  nano .env                                    # điền khoá như trên
+  sudo cp deploy/gold-bot.service /etc/systemd/system/   # sửa User / đường dẫn nếu khác
+  sudo systemctl daemon-reload && sudo systemctl enable --now gold-bot
+  journalctl -u gold-bot -f                    # xem log
+  ```
+- Docker:
+  ```bash
+  docker build -t gold-bot .
+  docker run -d --name gold-bot --restart unless-stopped --env-file .env -v gold-bot-live:/app/live gold-bot
+  docker logs -f gold-bot
+  ```
+
+Cả hai cách đều tự chạy lại khi bot dừng hoặc máy khởi động lại. Nhật ký lệnh nằm ở `live/` (với Docker là volume `gold-bot-live`).
+
+**Trên Windows:** `scripts\run_bot.ps1` tự chạy lại bot khi bot dừng: lần đầu chờ 30 giây, lỗi liên tục thì chờ lâu dần, tối đa 10 phút. `scripts\install_autostart.ps1` cho bot tự chạy mỗi khi đăng nhập Windows (thêm `-Remove` để gỡ). Nếu dùng `BROKER=mt5` thì cần cài MT5 của PF Markets, đăng nhập, và bật *Algo Trading* trong MT5.
 
 ### Lệnh Telegram
 
@@ -173,6 +222,7 @@ telegram_bot/signals.py    # tín hiệu PDH/PDL trên nến M5, dùng lại l�
 | `/buy 0.01 [sl] [tp]`, `/sell ...` | Đặt lệnh thị trường. `/buy 1% 4050` thì lot được tính theo 1% rủi ro (bắt buộc có SL) |
 | `/close <ticket\|all>` | Đóng lệnh |
 | `/signals on\|off` | Bật/tắt cảnh báo PDH/PDL M5 |
+| `/history [n]` | n deal gần nhất và tổng lời/lỗ đã đóng |
 | `/id` | Xem chat id |
 
 Tham số không bí mật nằm trong `config.yaml`, khoá `mt5_bot` (mã, múi giờ, `max_lot`, % rủi ro cho tín hiệu...).
@@ -180,6 +230,16 @@ Tham số không bí mật nằm trong `config.yaml`, khoá `mt5_bot` (mã, múi
 ### Cảnh báo tín hiệu
 
 Mỗi khi một nến M5 đóng, bot chạy logic PDH/PDL (phá đỉnh/đáy hôm qua rồi retest, xem `clone_repo/README.md`). Khi có tín hiệu, bot gửi giá vào, SL (1 ATR), TP1 (1,5R) và TP2 (3R), kèm lot tính theo `signal_risk_pct`. Bot **không tự vào lệnh**: muốn vào thì bấm *Xác nhận* trong 5 phút. Sau khi khớp, bot tính lại SL/TP theo giá khớp thật và tự chốt 50% khi giá chạm TP1. Lưu ý: backtest chiến lược này chỉ có 37 lệnh trong 6 năm (PF 1,21 ở spread $0,30, PF 1,02 ở spread $0,50), quá ít để tin là có lợi thế.
+
+Tín hiệu live dùng lại đúng lớp `PdhPdl` của backtest. Bài test `telegram_bot/test_signals.py` cho logic live chỉ nhìn số nến mà bot lấy về mỗi lần, rồi so với backtest chạy trên toàn bộ lịch sử. Kết quả 2021–2026: bắt đủ **37/37** tín hiệu, **0** báo nhầm trên 3026 nến thử. Bot cần lấy **10.000 nến M5**: với 1000 nến, EMA200 khung H1 (bộ lọc xu hướng) chưa đủ dữ liệu để ra giá trị đúng, nên bot bỏ sót 1/3 tín hiệu năm 2025.
+
+### Nhật ký
+
+- `live/trades_mt5.csv`: mọi deal của tài khoản, lấy từ lịch sử MT5. Gồm cả lệnh bị SL/TP/stop out đóng và lệnh đặt tay trong MT5, kèm lời/lỗ, phí, swap. Khi một lệnh bị đóng không phải do bot, Telegram nhận thông báo 🔔.
+- `live/signals_mt5.csv`: mọi tín hiệu bot đã báo (giá, SL, TP, lot), kể cả tín hiệu bạn không vào lệnh, để sau này so với backtest.
+- `live/logs/bot_YYYYMMDD.log`: log của `run_bot.ps1`.
+
+Cả ba đều nằm trong `.gitignore`.
 
 ### An toàn
 
@@ -190,10 +250,14 @@ Mỗi khi một nến M5 đóng, bot chạy logic PDH/PDL (phá đỉnh/đáy h�
 
 ### Việc còn lại
 
-- [ ] Cài MT5 PF Markets, chạy `--check` (tên mã vàng, độ lệch giờ server, kiểu khớp lệnh).
+- [ ] Tạo tài khoản MT5 demo + MetaApi, chạy `--check` (tên mã vàng, kết nối, DEMO).
 - [ ] Test `/chart`, `/price`, `/account`, rồi `/buy 0.01` + `/close` trên demo.
-- [ ] So tín hiệu PDH/PDL live với backtest. Bài test offline (tín hiệu live có khớp đúng các nến của backtest không) đang dở.
-- [ ] Chưa có: tự chạy lại khi máy khởi động, log lệnh ra CSV.
+- [ ] Chạy demo vài tuần, so `live/signals_mt5.csv` với backtest trên cùng giai đoạn. Giá của broker khác PAXG nên PDH/PDL sẽ lệch một chút.
+- [x] Tín hiệu live khớp backtest (offline, 37/37).
+- [x] Tự chạy lại khi bot dừng và khi đăng nhập Windows (`scripts/`).
+- [x] Log lệnh và tín hiệu ra CSV, lệnh `/history`.
+- [x] Kết nối qua MetaApi để chạy trên cloud Linux (test với SDK giả lập: nến 10.000 cây khớp 100%, đặt/đóng/sửa lệnh, lịch sử deal).
+- [ ] Build và chạy Docker image thật (đã kiểm tra đủ file, chưa build vì Docker Desktop đang tắt).
 
 ## 4. Công nghệ
 

@@ -1,6 +1,6 @@
 """Bot Telegram điều khiển tài khoản MT5 (PF Markets): xem giá, biểu đồ, tài khoản, đặt/đóng lệnh, cảnh báo tín hiệu.
 
-    .venv\\Scripts\\python telegram_bot\\bot.py            # chạy bot (để cửa sổ mở; terminal MT5 phải đang chạy)
+    .venv\\Scripts\\python telegram_bot\\bot.py            # chạy bot (BROKER=metaapi: chạy ở đâu cũng được; BROKER=mt5: cần terminal MT5 trên Windows)
     .venv\\Scripts\\python telegram_bot\\bot.py --check    # chỉ kiểm tra kết nối MT5 + Telegram rồi thoát
 
 Cài đặt: xem mục "Bot Telegram + MT5" trong README.md. Bí mật nằm trong .env, tham số trong config.yaml (khoá mt5_bot).
@@ -14,11 +14,13 @@ Lệnh Telegram:
     /sell <lot | 1%> [sl] [tp]               bán thị trường
     /close <ticket | all>                    đóng lệnh
     /signals [on|off]                        bật/tắt cảnh báo tín hiệu PDH/PDL (M5)
+    /history [n]                             n deal gần nhất (live/trades_mt5.csv) + tổng lời/lỗ
     /id                                      xem chat id của bạn
 
 Chỉ các chat id trong TELEGRAM_ALLOWED_CHAT_IDS được dùng bot. Mọi lệnh giao dịch đều phải bấm nút xác nhận.
 """
 import argparse
+import csv
 import html
 import json
 import logging
@@ -36,12 +38,20 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from broker.mt5_client import TF_MINUTES, TIMEFRAMES, MT5Client, MT5Error  # noqa: E402
+from broker import make_client  # noqa: E402
+from broker.mt5_client import TF_MINUTES, TIMEFRAMES, MT5Error  # noqa: E402
 from telegram_bot import chart as chartlib  # noqa: E402
-from telegram_bot.signals import pdh_pdl_signal, prev_day_levels  # noqa: E402
+from telegram_bot.signals import M5_BARS, pdh_pdl_signal, prev_day_levels  # noqa: E402
 from telegram_bot.telegram_api import Telegram  # noqa: E402
 
 STATE_FILE = ROOT / "live" / "state_mt5_bot.json"
+TRADES_CSV = ROOT / "live" / "trades_mt5.csv"      # mọi deal của tài khoản (kể cả SL/TP, lệnh đặt tay trong MT5)
+SIGNALS_CSV = ROOT / "live" / "signals_mt5.csv"    # mọi tín hiệu bot đã báo
+DEAL_ENTRY = {0: "IN", 1: "OUT", 2: "INOUT", 3: "OUT_BY"}
+DEAL_REASON = {0: "CLIENT", 1: "MOBILE", 2: "WEB", 3: "EXPERT", 4: "SL", 5: "TP", 6: "STOP_OUT", 7: "ROLLOVER",
+               8: "VMARGIN", 9: "SPLIT"}
+TRADE_FIELDS = ["time_utc", "time_local", "ticket", "position", "symbol", "side", "entry", "reason", "volume",
+                "price", "profit", "commission", "swap", "fee", "magic", "comment"]
 log = logging.getLogger("mt5bot")
 
 DEFAULTS = {
@@ -61,7 +71,8 @@ COMMANDS = [
     ("chart", "Biểu đồ: /chart M15 150"), ("price", "Giá bid/ask"), ("account", "Số dư, equity"),
     ("positions", "Lệnh đang mở"), ("buy", "Mua: /buy 0.01 [sl] [tp] hoặc /buy 1% sl"),
     ("sell", "Bán: /sell 0.01 [sl] [tp]"), ("close", "Đóng: /close <ticket|all>"),
-    ("signals", "Cảnh báo PDH/PDL: /signals on|off"), ("id", "Chat id của bạn"), ("help", "Hướng dẫn"),
+    ("signals", "Cảnh báo PDH/PDL: /signals on|off"), ("history", "Lệnh đã khớp gần đây: /history 10"),
+    ("id", "Chat id của bạn"), ("help", "Hướng dẫn"),
 ]
 
 
@@ -87,6 +98,18 @@ def esc(s):
     return html.escape(str(s))
 
 
+def append_csv(path, fields, rows):
+    if not rows:
+        return
+    path.parent.mkdir(exist_ok=True)
+    new = not path.exists()
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        if new:
+            w.writeheader()
+        w.writerows(rows)
+
+
 class Bot:
     def __init__(self, cfg, mt, tg, allowed):
         self.cfg, self.mt, self.tg, self.allowed = cfg, mt, tg, allowed
@@ -99,6 +122,7 @@ class Bot:
             except ValueError:
                 pass
         self.last_m5_check = None
+        self.last_deal_sync = 0.0
 
     # ----- tiện ích -----
     def save(self):
@@ -141,6 +165,7 @@ class Bot:
                     self.handle_update(u)
                 self.mt.ensure()
                 self.manage_tp1()
+                self.sync_deals()
                 self.check_signals()
                 self.pending = {k: v for k, v in self.pending.items() if v["expires"] > time.time()}
             except KeyboardInterrupt:
@@ -397,7 +422,7 @@ class Bot:
         if self.last_m5_check == bar or now - bar < pd.Timedelta(seconds=5):   # đợi nến đóng hẳn
             return
         self.last_m5_check = bar
-        m5 = self.mt.rates(self.symbol, "M5", 1000, closed_only=True)
+        m5 = self.mt.rates(self.symbol, "M5", M5_BARS, closed_only=True)
         if now - m5.index[-1] > pd.Timedelta(minutes=15):      # thị trường đóng cửa
             return
         sig = pdh_pdl_signal(m5)
@@ -415,6 +440,10 @@ class Bot:
                 f"{esc(sig.note)} · nến M5 {self.fmt_time(sig.bar_time)}\n"
                 f"Giá ~{entry:.{d}f} · SL {sl:.{d}f} · TP1 {tp1:.{d}f} (50%) · TP2 {tp2:.{d}f}\n"
                 f"Lot {lot} ({self.cfg['signal_risk_pct']}% rủi ro). Bấm xác nhận trong {self.cfg['signal_confirm_minutes']} phút.")
+        append_csv(SIGNALS_CSV, ["bar_utc", "strategy", "side", "ref_close", "price", "sl", "tp1", "tp2", "lot", "note"],
+                   [{"bar_utc": sig.bar_time, "strategy": sig.strategy, "side": "BUY" if sig.side > 0 else "SELL",
+                     "ref_close": sig.ref_price, "price": entry, "sl": round(sl, d), "tp1": round(tp1, d),
+                     "tp2": round(tp2, d), "lot": lot, "note": sig.note}])
         for cid in self.allowed:
             if lot > 0:
                 self.ask_confirm(cid, text, {"action": "signal", "signal": sig}, ttl=self.cfg["signal_confirm_minutes"] * 60)
@@ -444,6 +473,55 @@ class Bot:
         if changed:
             self.save()
 
+    # ----- nhật ký lệnh -----
+    def sync_deals(self, every=60):
+        """Ghi deal mới vào live/trades_mt5.csv. Báo Telegram khi lệnh bị đóng không phải do bot (SL, TP, stop out,
+        đóng tay trong MT5). Lần chạy đầu chỉ lấy mốc, không ghi lại lịch sử cũ."""
+        if time.time() - self.last_deal_sync < every:
+            return
+        self.last_deal_sync = time.time()
+        last = self.state.get("last_deal")
+        since = pd.Timestamp(self.state.get("last_deal_time") or pd.Timestamp.now("UTC").tz_localize(None))
+        deals = self.mt.deals(since)
+        if last is None:
+            self.state["last_deal"] = max((d.ticket for d in deals), default=0)
+            self.state["last_deal_time"] = str(since)
+            self.save()
+            return
+        new = [d for d in deals if d.ticket > last and d.symbol]      # symbol rỗng = nạp/rút tiền
+        if not new:
+            return
+        rows = []
+        for d in new:
+            t = self.mt.time_utc(d.time, d.symbol)
+            rows.append({"time_utc": t, "time_local": self.local(t).strftime("%Y-%m-%d %H:%M:%S"), "ticket": d.ticket,
+                         "position": d.position_id, "symbol": d.symbol, "side": "BUY" if d.type == 0 else "SELL",
+                         "entry": DEAL_ENTRY.get(d.entry, d.entry), "reason": DEAL_REASON.get(d.reason, d.reason),
+                         "volume": d.volume, "price": d.price, "profit": d.profit, "commission": d.commission,
+                         "swap": d.swap, "fee": getattr(d, "fee", 0.0), "magic": d.magic, "comment": d.comment})
+            if d.entry in (1, 3) and not (d.comment or "").startswith("tg-"):
+                why = {4: "chạm SL", 5: "chạm TP", 6: "stop out"}.get(d.reason, "đóng ngoài bot")
+                net = d.profit + d.commission + d.swap + getattr(d, "fee", 0.0)
+                self.broadcast(f"🔔 Lệnh #{d.position_id} {esc(d.symbol)} {why}: {d.volume} lot @ {d.price} · "
+                               f"<b>{net:+,.2f}</b>")
+        append_csv(TRADES_CSV, TRADE_FIELDS, rows)
+        self.state["last_deal"] = max(d.ticket for d in new)
+        self.state["last_deal_time"] = str(max(r["time_utc"] for r in rows))
+        self.save()
+
+    def cmd_history(self, chat, args):
+        n = int(args[0]) if args and args[0].isdigit() else 10
+        if not TRADES_CSV.exists():
+            self.tg.send(chat, "Chưa có lệnh nào trong nhật ký (live/trades_mt5.csv).")
+            return
+        df = pd.read_csv(TRADES_CSV).tail(max(1, min(n, 50)))
+        lines = [f"{r.time_local[5:16]} #{r.position} {r.side} {r.entry} {r.volume} @ {r.price} · {r.reason}"
+                 + (f" · <b>{r.profit + r.commission + r.swap + r.fee:+,.2f}</b>" if r.entry != "IN" else "")
+                 for r in df.itertuples()]
+        closed = pd.read_csv(TRADES_CSV).query("entry != 'IN'")
+        total = (closed.profit + closed.commission + closed.swap + closed.fee).sum()
+        self.tg.send(chat, "\n".join(lines) + f"\n\nTổng lời/lỗ đã đóng: <b>{total:+,.2f}</b> ({len(closed)} deal)")
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -471,9 +549,10 @@ def main():
                     tg.send(cid, f"Chat id của bạn: <code>{cid}</code>\nThêm vào .env: TELEGRAM_ALLOWED_CHAT_IDS={cid}")
                     print(f"chat id: {cid}")
 
-    mt = MT5Client()
+    mt = make_client()
+    print(f"Đang kết nối broker ({type(mt).__name__}), MetaApi lần đầu có thể mất 1–2 phút...")
     a = mt.connect()
-    print(f"MT5 OK: {a.login} @ {a.server} · {'DEMO' if mt.is_demo() else 'THẬT'} · số dư {a.balance} {a.currency}")
+    print(f"Broker OK: {a.login} @ {a.server} · {'DEMO' if mt.is_demo() else 'THẬT'} · số dư {a.balance} {a.currency}")
     bot = Bot(cfg, mt, tg, allowed)
     t = mt.tick(bot.symbol)
     print(f"Mã {bot.symbol}: bid {t.bid} ask {t.ask} · giờ server lệch UTC {mt.server_offset(bot.symbol) / 3600:+.1f}h")

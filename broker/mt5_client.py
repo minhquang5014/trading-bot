@@ -138,6 +138,20 @@ class MT5Client:
         df.index.name = "time"
         return df.rename(columns={"tick_volume": "volume"})[["open", "high", "low", "close", "volume"]]
 
+    def deals(self, since_utc, until_utc=None):
+        """Lịch sử deal (khớp lệnh) trong khoảng giờ UTC, gồm cả lệnh bị SL/TP đóng và lệnh đặt tay trong MT5.
+        MT5 lọc theo giờ server nên nới khoảng thêm 1 ngày mỗi bên; người gọi tự lọc theo ticket."""
+        start = pd.Timestamp(since_utc) - pd.Timedelta(days=1)
+        end = pd.Timestamp(until_utc or pd.Timestamp.now("UTC").tz_localize(None)) + pd.Timedelta(days=1)
+        ds = mt5.history_deals_get(start.to_pydatetime(), end.to_pydatetime())
+        if ds is None:
+            raise MT5Error(f"history_deals_get lỗi: {mt5.last_error()}")
+        return sorted(ds, key=lambda d: d.ticket)
+
+    def time_utc(self, server_ts, symbol):
+        """Đổi giờ server (giây) của deal/tick sang UTC."""
+        return pd.to_datetime(server_ts - self.server_offset(symbol), unit="s")
+
     def positions(self, symbol=None):
         ps = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
         return list(ps or [])

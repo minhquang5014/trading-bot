@@ -11,3 +11,5 @@ data/*.log
 clone_repo/repos/
 clone_repo/results/
 .env
+live/*_mt5.csv
+live/logs/

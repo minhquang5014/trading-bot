@@ -1,0 +1,7 @@
+# Chỉ những gì bot Telegram cần (dùng cho cloud / Docker). Đủ bộ backtest: requirements.txt
+pandas
+numpy
+pyyaml
+matplotlib
+requests
+metaapi-cloud-sdk
