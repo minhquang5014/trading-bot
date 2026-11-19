@@ -103,7 +103,7 @@ class Engine:
         self.trades.append({
             "symbol": sym, "entry_date": pos.entry_date, "exit_date": str(pd.Timestamp(date).date()),
             "entry_price": pos.entry_price, "exit_price": fill, "cost": pos.cost, "pnl": pnl,
-            "ret": pnl / pos.cost, "bars_held": pos.bars_held, "reason": reason,
+            "ret": pnl / pos.cost, "bars_held": pos.bars_held, "reason": reason, "risk_pct": pos.r_pct(cfg),
         })
         if pnl <= 0:
             self.last_loss[sym] = str(pd.Timestamp(date).date())

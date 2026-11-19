@@ -77,6 +77,9 @@ tbody tr{cursor:pointer} tbody tr:hover{background:var(--panel)} tbody tr.sel{ba
   <span class="liveonly"><select id="tf" title="Khung nến">
     <option value="1d">1D</option><option value="4h">4h</option><option value="1h">1h</option><option value="15m">15p</option>
   </select></span>
+  <span class="liveonly"><select id="preset" title="Bộ luật mô phỏng">
+    <option value="crypto">Luật crypto (config.yaml)</option><option value="combo">Ghép mục 9 (như us_stocks)</option>
+  </select></span>
   <span class="sep"></span>
   <span id="ranges"></span>
   <span class="sep"></span>
@@ -120,12 +123,22 @@ const LIVE_PARAMS = {
   filters: {trend_ma: 200, golden_cross: [50, 200], rs_lookback: 20, cooldown_days: 10,
             breakout_days: 20, min_vol_ratio: 1.5, max_extension: 0.25, min_history: 200},
 };
+// Bản ghép README mục 9 (giống markets.us_stocks trong config.yaml), để xem các luật mới trên dữ liệu Binance.
+const COMBO_PARAMS = {...LIVE_PARAMS,
+  stop_atr: 2.0, breakeven_r: 1.0, take_profit_r: 2.5, time_stop_days: 10000, exit_ma: 0, rank_by: "momentum",
+  stoploss_guard: {count: 3, days: 10, pause_days: 5}, drawdown_guard: {pct: 0.10, days: 30, pause_days: 10},
+  filters: {trend_ma: 200, golden_cross: [50, 200], rs_lookback: 20, cooldown_days: 10,
+            pullback: {fast: 21, slow: 50, lookback: 5, rsi_max: null, rsi_min: null},
+            ema_slope: [200, 5], adx_min: 25, max_rsi: 70},
+};
+const PRESETS = {crypto: LIVE_PARAMS, combo: COMBO_PARAMS};
 let P = LIVE ? LIVE_PARAMS : D.params;
 
 const $ = s => document.querySelector(s);
 const cv = $("#cv"), ctx = cv.getContext("2d");
 const AX_R = 76, AX_B = 26, STRIP = 4;
 const REASONS = {stop_loss:"Cắt lỗ cứng", trailing_stop:"Chốt lời động", time_stop:"Hết thời gian",
+  take_profit:"Chốt lời theo R", breakeven:"Hoà vốn",
   below_fast_ma:"Dưới MA nhanh", regime:"Thị trường xấu", delisted:"Bị gỡ khỏi sàn", end_of_test:"Hết backtest",
   open:"Đang giữ"};
 
@@ -166,6 +179,45 @@ function ema(a, n){
   for (let i = 0; i < a.length; i++){ e = e == null ? a[i] : a[i] * k + e * (1 - k); if (i >= n - 1) o[i] = e; }
   return o;
 }
+// Làm mượt Wilder (ewm alpha=1/n, adjust=False, min_periods=n) như strategy/indicators.py; bỏ qua null ở đầu.
+function wilder(a, n){
+  const o = new Array(a.length).fill(null); let e = null, cnt = 0;
+  for (let i = 0; i < a.length; i++){
+    if (a[i] == null || !isFinite(a[i])){ continue; }
+    cnt++; e = e == null ? a[i] : e + (a[i] - e) / n;
+    if (cnt >= n) o[i] = e;
+  }
+  return o;
+}
+function rsiArr(a, n){
+  const up = [null], dn = [null];
+  for (let i = 1; i < a.length; i++){ const d = a[i] - a[i - 1]; up.push(Math.max(d, 0)); dn.push(Math.max(-d, 0)); }
+  const U = wilder(up, n), Dn = wilder(dn, n);
+  return U.map((u, i) => u == null || Dn[i] == null ? null : Dn[i] === 0 ? 100 : 100 - 100 / (1 + u / Dn[i]));
+}
+function trueRange(c){
+  const o = [null];
+  for (let i = 1; i < c.c.length; i++){
+    const pc = c.c[i - 1];
+    o.push(Math.max(c.h[i] - c.l[i], Math.abs(c.h[i] - pc), Math.abs(c.l[i] - pc)));
+  }
+  return o;
+}
+function atrArr(c, n){ return wilder(trueRange(c), n); }
+function dmiArr(c, n){
+  const pdm = [0], mdm = [0];
+  for (let i = 1; i < c.c.length; i++){
+    const up = c.h[i] - c.h[i - 1], down = c.l[i - 1] - c.l[i];
+    pdm.push(up > down && up > 0 ? up : 0); mdm.push(down > up && down > 0 ? down : 0);
+  }
+  const tr = wilder(trueRange(c), n), P_ = wilder(pdm, n), M_ = wilder(mdm, n);
+  const pdi = tr.map((t, i) => t == null || P_[i] == null ? null : 100 * P_[i] / t);
+  const mdi = tr.map((t, i) => t == null || M_[i] == null ? null : 100 * M_[i] / t);
+  const dx = pdi.map((p, i) => p == null || mdi[i] == null || p + mdi[i] === 0 ? null : 100 * Math.abs(p - mdi[i]) / (p + mdi[i]));
+  return {pdi, mdi, adx: wilder(dx, n)};
+}
+// Cắt lỗ ban đầu của lệnh: lấy từ dữ liệu lệnh (cắt lỗ ATR khác nhau theo mã), file cũ thì dùng stop_loss_pct.
+function slOf(t){ return t.sl != null ? t.sl : t.ep * (1 - P.stop_loss_pct); }
 function niceTicks(lo, hi, count){
   if (!(hi > lo)) return [lo];
   const raw = (hi - lo) / Math.max(1, count), mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -218,7 +270,7 @@ function renderHeader(){
     stat("Phí + trượt giá", money(s.costs), "neg");
   $("#hdr").innerHTML = h;
   $("#params").textContent = (LIVE ? "Mô phỏng 1 mã, mỗi lệnh 100% vốn, không có bước xếp hạng shotgun. Bộ lọc thị trường luôn dùng BTC nến 1D (ngày đã đóng). Tham số: " : "Tham số: ")
-    + Object.entries(P).map(([k, v]) => `${k}=${v}`).join(" · ");
+    + Object.entries(P).filter(([k, v]) => v != null).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
   $("#l_ma1").textContent = "MA" + P.regime_fast_ma;
   $("#l_ma2").textContent = "MA" + P.regime_slow_ma;
   $("#l_ma3").textContent = "MA" + P.regime_long_ma;
@@ -347,7 +399,7 @@ function paint(){
   // --- thang giá ---
   let lo = Infinity, hi = -Infinity;
   for (let i = i0; i <= i1; i++){ if (c.l[i] < lo) lo = c.l[i]; if (c.h[i] > hi) hi = c.h[i]; }
-  if (S.sel && S.sel.xi >= i0 && S.sel.ei <= i1){ lo = Math.min(lo, S.sel.ep * (1 - P.stop_loss_pct)); }
+  if (S.sel && S.sel.xi >= i0 && S.sel.ei <= i1){ lo = Math.min(lo, slOf(S.sel)); if (S.sel.tp) hi = Math.max(hi, S.sel.tp); }
   if (!isFinite(lo)){ lo = 0; hi = 1; }
   const pad = (hi - lo) * 0.04 || hi * 0.01;
   const ps = priceScale(Math.max(lo - pad, lo > 0 ? lo * 0.5 : lo - pad), hi + pad);
@@ -393,7 +445,8 @@ function paint(){
       ctx.fillStyle = col; ctx.textAlign = "left"; ctx.fillText(txt, xb + 44, y);
     };
     line(t.ep, css.accent, "Vào " + fmtP(t.ep));
-    line(t.ep * (1 - P.stop_loss_pct), css.down, "Cắt lỗ " + fmtP(t.ep * (1 - P.stop_loss_pct)));
+    line(slOf(t), css.down, "Cắt lỗ " + fmtP(slOf(t)));
+    if (t.tp) line(t.tp, css.up, "Chốt lời " + fmtP(t.tp));
     line(t.xp, t.pnl >= 0 ? css.up : css.down, (t.why === "open" ? "Hiện tại " : "Ra ") + fmtP(t.xp) + " (" + pct(t.ret) + ")");
   }
 
@@ -854,7 +907,38 @@ function entryFilters(c, reg, ma5, ma25, avgV, barsPerDay, intra){
   }
   if (f.max_extension) rules.push([i => ma25[i] != null && cl[i] / ma25[i] - 1 <= f.max_extension, "đã chạy quá xa MA25"]);
   if (f.min_history) rules.push([i => i + 1 >= f.min_history, `chưa đủ ${f.min_history} nến lịch sử`]);
-  return {ok: i => rules.every(r => r[0](i)), fails: i => rules.filter(r => !r[0](i)).map(r => r[1])};
+
+  // Các ý ở README mục 9 (giống strategy/scanner.py)
+  const pb = f.pullback, fastN = (pb && pb.fast) || 21;
+  const r14 = (f.max_rsi || (pb && (pb.rsi_max || pb.rsi_min))) ? rsiArr(cl, 14) : null;
+  const atrA = atrArr(c, P.atr_period || 14);
+  if (pb){
+    const eF = ema(cl, fastN), eS = ema(cl, pb.slow || 50), lb = pb.lookback || 5;
+    const touched = cl.map((v, i) => eF[i] != null && eS[i] != null && c.l[i] <= eF[i] && v > eS[i] &&
+      (!pb.rsi_max || (r14[i] != null && r14[i] <= pb.rsi_max)));
+    rules.push([i => { for (let k = Math.max(0, i - lb + 1); k <= i; k++) if (touched[k]) return true; return false; },
+      `chưa hồi về EMA${fastN} trong ${lb} nến`]);
+    rules.push([i => cl[i] > c.o[i] && eF[i] != null && eS[i] != null && cl[i] > eF[i] && eF[i] > eS[i] &&
+      (!pb.rsi_min || (r14[i] != null && r14[i] >= pb.rsi_min)), "chưa có nến xanh đóng trên EMA" + fastN]);
+  }
+  if (f.max_dist_atr){
+    const eF = ema(cl, fastN);
+    rules.push([i => eF[i] != null && atrA[i] != null && cl[i] - eF[i] <= f.max_dist_atr * atrA[i], `cách EMA${fastN} > ${f.max_dist_atr} ATR`]);
+  }
+  if (f.ema_slope){
+    const [n2, k] = f.ema_slope, e = ema(cl, n2);
+    rules.push([i => i >= k && e[i] != null && e[i - k] != null && e[i] > e[i - k], `EMA${n2} chưa dốc lên`]);
+  }
+  if (f.adx_min){
+    const d = dmiArr(c, 14);
+    rules.push([i => d.adx[i] != null && d.adx[i] >= f.adx_min && d.pdi[i] > d.mdi[i], `ADX < ${f.adx_min} hoặc −DI > +DI (đi ngang)`]);
+  }
+  if (f.max_rsi) rules.push([i => r14[i] != null && r14[i] < f.max_rsi, `RSI ≥ ${f.max_rsi} (quá nóng)`]);
+  if (f.max_vol_ratio){
+    const vb = sma(c.v, P.volume_lookback);
+    rules.push([i => i > 0 && vb[i - 1] && c.v[i] / vb[i - 1] <= f.max_vol_ratio, `khối lượng > ${f.max_vol_ratio}× TB (pump)`]);
+  }
+  return {ok: i => rules.every(r => r[0](i)), fails: i => rules.filter(r => !r[0](i)).map(r => r[1]), atr: atrA};
 }
 
 // Mô phỏng luật vào/ra trên 1 mã (giống backtest/engine.py nhưng không có bước xếp hạng nhiều mã).
@@ -866,7 +950,35 @@ function simulate(sym, c, reg, closedN){
   const fee = P.fee_pct, slip = P.slippage_pct;
   const F = entryFilters(c, reg, ma5, ma25, avgV, barsPerDay, tfMin < 1440);
   const coolBars = Math.round(((P.filters || {}).cooldown_days || 0) * barsPerDay);
-  let lastLossBar = -1e9;
+  // Thoát dưới MA: exit_ma (mặc định MA nhanh của bộ lọc, 0 = tắt), giống strategy/scanner.py
+  const exitN = P.exit_ma != null ? P.exit_ma : P.regime_fast_ma;
+  const maExit = exitN ? sma(c.c, exitN) : null;
+  // Cắt lỗ: stop_loss_pct cố định, hoặc stop_atr × ATR / giá (giới hạn trong stop_atr_range)
+  const [slo, shi] = P.stop_atr_range || [0.02, 0.25];
+  const stopPct = i => {
+    const a = F.atr[i];
+    if (!P.stop_atr || a == null || !(c.c[i] > 0)) return P.stop_loss_pct;
+    return Math.min(Math.max(P.stop_atr * a / c.c[i], slo), shi);
+  };
+  const tpOf = p => P.take_profit_r ? p.ep * (1 + P.take_profit_r * p.risk) : null;
+  // StoplossGuard / MaxDrawdown (freqtrade), tính theo ngày lịch như backtest/engine.py
+  const DAY = 864e5, stopTimes = [];
+  let pausedUntil = -Infinity;
+  const paused = i => {
+    const now = tMs(c.t[i]);
+    if (now <= pausedUntil) return true;
+    let pause = 0;
+    const g = P.stoploss_guard;
+    if (g && stopTimes.filter(x => x > now - g.days * DAY).length >= g.count){ pause = g.pause_days; stopTimes.length = 0; }
+    const h = P.drawdown_guard;
+    if (h && eq.length){
+      const recent = eq.slice(-Math.max(1, Math.round(h.days * barsPerDay)));
+      if (recent[recent.length - 1] / Math.max(...recent) - 1 <= -h.pct) pause = Math.max(pause, h.pause_days);
+    }
+    if (pause){ pausedUntil = now + pause * DAY; return true; }
+    return false;
+  };
+  let lastLossBar = -1e9, pendStop = P.stop_loss_pct;
   let cash = CAPITAL, pos = null, pendExit = null, pendEntry = false, costs = 0;
   const trades = [], eq = [], dd = [], t = [];
   let peak = CAPITAL;
@@ -875,56 +987,70 @@ function simulate(sym, c, reg, closedN){
     costs += pos.qty * px * (slip + fee);
     cash += proceeds;
     trades.push({s: sym, ed: c.t[pos.ei], xd: c.t[i], ep: pos.ep, xp: fill, ret: proceeds / pos.cost - 1,
-      pnl: proceeds - pos.cost, bars: pos.bars, why});
+      pnl: proceeds - pos.cost, bars: pos.bars, why, sl: pos.sl0, tp: tpOf(pos)});
     if (proceeds <= pos.cost) lastLossBar = i;
+    if (why === "stop_loss") stopTimes.push(tMs(c.t[i]));
     pos = null; pendExit = null;
   };
   for (let i = 0; i < closedN; i++){
     // mở cửa
     if (pos && pendExit) sell(i, c.o[i], pendExit);
     if (!pos && pendEntry){
-      const fill = c.o[i] * (1 + slip), notional = cash;
-      pos = {ei: i, ep: fill, qty: notional / (fill * (1 + fee)), cost: notional, stop: fill * (1 - P.stop_loss_pct), highest: fill, bars: 0, trailing: false};
+      const fill = c.o[i] * (1 + slip), notional = cash, stop = fill * (1 - pendStop);
+      pos = {ei: i, ep: fill, qty: notional / (fill * (1 + fee)), cost: notional, stop, sl0: stop, risk: pendStop,
+             highest: fill, bars: 0, trailing: false, be: false};
       costs += notional * (slip + fee); cash = 0;
     }
     pendEntry = false;
     if (pos){
+      // cùng nến chạm cả cắt lỗ lẫn chốt lời: coi như cắt lỗ trước (bảo thủ, giống engine)
       const px = c.o[i] <= pos.stop ? c.o[i] : c.l[i] <= pos.stop ? pos.stop : null;
-      if (px != null) sell(i, px, pos.trailing ? "trailing_stop" : "stop_loss");
+      if (px != null) sell(i, px, pos.trailing ? "trailing_stop" : pos.be ? "breakeven" : "stop_loss");
+      else {
+        const tp = tpOf(pos);
+        if (tp != null && (c.o[i] >= tp || c.h[i] >= tp)) sell(i, c.o[i] >= tp ? c.o[i] : tp, "take_profit");
+      }
     }
     // đóng cửa
     if (pos){
       pos.bars++;
       pos.highest = Math.max(pos.highest, c.h[i]);
+      if (P.breakeven_r && !pos.be && pos.highest >= pos.ep * (1 + P.breakeven_r * pos.risk)){
+        pos.be = true;
+        pos.stop = Math.max(pos.stop, pos.ep * (1 + (P.breakeven_offset_pct || 0)));
+      }
       if (!pos.trailing && pos.highest >= pos.ep * (1 + P.trail_trigger_pct)) pos.trailing = true;
       if (pos.trailing) pos.stop = Math.max(pos.stop, pos.ep, pos.highest * (1 - P.trail_pct));
       if (reg.above[i] === false) pendExit = "regime";
       else if (pos.bars >= timeStopBars && c.c[i] / pos.ep - 1 < P.time_stop_min_gain) pendExit = "time_stop";
-      else if (ma5[i] != null && c.c[i] < ma5[i]) pendExit = "below_fast_ma";
+      else if (maExit && maExit[i] != null && c.c[i] < maExit[i]) pendExit = "below_fast_ma";
     }
     const e = cash + (pos ? pos.qty * c.c[i] : 0);
     peak = Math.max(peak, e); eq.push(e); dd.push(e / peak - 1); t.push(c.t[i]);
-    if (!pos && reg.ok[i] && F.ok(i) && i - lastLossBar > coolBars) pendEntry = true;
+    if (!pos && reg.ok[i] && !paused(i) && F.ok(i) && (!coolBars || i - lastLossBar > coolBars)){ pendEntry = true; pendStop = stopPct(i); }
   }
   // lệnh đang mở: tính theo giá hiện tại
   const last = c.t.length - 1;
   if (pos){
     const mv = pos.qty * c.c[last] * (1 - fee);
-    trades.push({s: sym, ed: c.t[pos.ei], xd: c.t[last], ep: pos.ep, xp: c.c[last], ret: mv / pos.cost - 1, pnl: mv - pos.cost, bars: pos.bars, why: "open"});
+    trades.push({s: sym, ed: c.t[pos.ei], xd: c.t[last], ep: pos.ep, xp: c.c[last], ret: mv / pos.cost - 1, pnl: mv - pos.cost,
+      bars: pos.bars, why: "open", sl: pos.stop, tp: tpOf(pos)});
   }
   // tín hiệu cho nến kế tiếp
   let signal;
   const nextLbl = intra => intra ? "nến kế tiếp" : "phiên mở cửa ngày mai (07:00 VN)";
   const intra = tfMin < 1440;
   if (pos && pendExit) signal = {text: "▼ BÁN ở " + nextLbl(intra), cls: "neg", tip: "Lý do: " + (REASONS[pendExit] || pendExit)};
-  else if (pos) signal = {text: `● ĐANG GIỮ ${pct(c.c[last] / pos.ep - 1)} · cắt lỗ ${fmtP(pos.stop)}`, cls: "warn", tip: pos.trailing ? "Đang chốt lời động" : "Cắt lỗ cứng"};
+  else if (pos) signal = {text: `● ĐANG GIỮ ${pct(c.c[last] / pos.ep - 1)} · cắt lỗ ${fmtP(pos.stop)}` + (tpOf(pos) ? ` · chốt lời ${fmtP(tpOf(pos))}` : ""),
+    cls: "warn", tip: pos.trailing ? "Đang chốt lời động" : pos.be ? "Đã dời cắt lỗ về hoà vốn" : "Cắt lỗ cứng"};
   else if (pendEntry) signal = {text: "▲ MUA ở " + nextLbl(intra), cls: "pos", tip: "Đủ điều kiện ở nến đã đóng gần nhất"};
   else {
     const i = closedN - 1, why = [];
     if (i >= 0){
       if (!reg.ok[i]) why.push("bộ lọc BTC chưa cho phép");
+      else if (tMs(c.t[i]) <= pausedUntil) why.push("đang tạm nghỉ sau chuỗi thua (guard)");
       why.push(...F.fails(i));
-      if (i - lastLossBar <= coolBars) why.push("đang nghỉ sau lệnh lỗ");
+      if (coolBars && i - lastLossBar <= coolBars) why.push("đang nghỉ sau lệnh lỗ");
     }
     signal = {text: "○ ĐỨNG NGOÀI", cls: "", tip: why.join(", ") || "–"};
     if (why.length) signal.text += " · " + why[0];
@@ -1050,6 +1176,12 @@ async function loadTopSymbols(){
 
 function initLive(){
   P = LIVE_PARAMS;
+  try { const k = localStorage.getItem("shotgun_preset"); if (PRESETS[k]){ P = PRESETS[k]; $("#preset").value = k; } } catch (e) {}
+  $("#preset").addEventListener("change", e => {
+    P = PRESETS[e.target.value] || LIVE_PARAMS;
+    try { localStorage.setItem("shotgun_preset", e.target.value); } catch (err) {}
+    if (LV.c) rebuildLive(true);
+  });
   fillSymbols(DEFAULT_SYMS.map(s => ({s})));
   const sel = $("#sym");
   sel.addEventListener("change", () => loadLive(sel.value, LV.tf));
